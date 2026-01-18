@@ -1,0 +1,1 @@
+python scripts/train.py configs/drivelaw_video.yaml 

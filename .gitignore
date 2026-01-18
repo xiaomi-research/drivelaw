@@ -1,0 +1,109 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Logs and outputs
+*.log
+*.txt
+!requirements.txt
+!README.txt
+# Allow demo prompt txt files
+!DriveLaW-Video/Infer/demo/prompts/*.txt
+outputs/
+output*.mp4
+output*.avi
+*.npy
+*.pt
+*.pth
+*.pkl
+*.pickle
+
+# Test outputs and visualizations
+attention_visualizations/
+spatial_attention_vis/
+ltx_transformer_features_pca/
+pic*/
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Model checkpoints (too large for git)
+*.safetensors
+*.ckpt
+*.bin
+checkpoints/
+models/
+
+# Data
+dataset/
+data/
+*.csv
+!configs/*.csv
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Reference codebases (should not be committed)
+LTX-Video-Trainer-main/
+recogdrive-main/
+
+# Preprocessed data directories
+.precomputed/
+.precache/
+cache/
+
+# Training logs and outputs
+train_*.txt
+eval_*.txt
+*_drivelaw*.txt
+
+# Video demo outputs (but keep input videos)
+DriveLaW-Video/Infer/demo/results/*.mp4

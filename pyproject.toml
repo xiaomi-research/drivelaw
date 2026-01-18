@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=65.5.1", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drivelaw"
+version = "1.0.0"
+description = "DriveLaW: Driving Video Generation and Planning with Latent Diffusion"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "DriveLaW Team" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+# Video Generation Inference dependencies
+dependencies = [
+    # Core ML frameworks
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
+    "diffusers>=0.32.1",
+    "transformers>=4.47.2,<4.52.0",
+    "pytorch-lightning",
+    "timm",
+    
+    # Video generation specific
+    "einops",
+    "sentencepiece>=0.1.96",
+    "huggingface-hub~=0.30",
+    "imageio>=2.37.0",
+    "imageio-ffmpeg>=0.6.0",
+    "av>=14.2.1",
+    
+    # Training utilities
+    "accelerate>=1.2.1",
+    "peft>=0.14.0",
+    "wandb>=0.19.11",
+    "bitsandbytes>=0.45.2; sys_platform == 'linux'",
+    "decord>=0.6.0; sys_platform == 'linux'",
+    
+    # Data processing
+    "opencv-python>=4.11.0.86",
+    "pandas>=2.2.3",
+    "numpy==1.26.4",
+    "pillow-heif>=0.21.0",
+    "scenedetect>=0.6.5.2",
+    
+    # Configuration and utilities
+    "hydra-core==1.2.0",
+    "pydantic>=2.10.4",
+    "rich>=13.9.4",
+    "typer>=0.15.1",
+    "safetensors>=0.5.0",
+    "optimum-quanto>=0.2.6",
+    "protobuf>=5.29.3",
+    "setuptools>=75.6.0",
+    
+    # Planner/Navigation dependencies
+    "nuplan-devkit @ git+https://github.com/motional/nuplan-devkit/@nuplan-devkit-v1.2",
+    "positional-encodings==6.0.1",
+    "aioboto3",
+    "aiofiles",
+    "bokeh==2.4.3",
+    "control==0.9.1",
+    "Fiona",
+    "geopandas>=0.12.1",
+    "guppy3==3.1.2",
+    "joblib",
+    "matplotlib",
+    "nest_asyncio",
+    "psutil",
+    "pyarrow",
+    "pyinstrument",
+    "pyogrio",
+    "pyquaternion>=0.9.5",
+    "rasterio",
+    "ray",
+    "retry",
+    "rtree",
+    "scipy",
+    "selenium",
+    "Shapely>=2.0.0",
+    "SQLAlchemy==1.4.27",
+    "sympy",
+    "tornado",
+    "tqdm",
+    "ujson",
+    "tensorboard==2.16.2",
+    "notebook",
+    "gradio==5.33.0",
+]
+
+# Note: Some dependencies may have version conflicts.
+# The setup resolves these by preferring higher version requirements.
+# Platform-specific dependencies (Linux-only) are preserved.
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pre-commit>=4.0.1",
+    "ruff>=0.8.6",
+]
+
+[tool.setuptools]
+packages = []
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.yml", "*.json", "*.txt", "*.md"]
