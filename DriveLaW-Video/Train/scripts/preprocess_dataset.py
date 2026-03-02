@@ -72,6 +72,7 @@ def preprocess_dataset(  # noqa: PLR0913
         batch_size=batch_size,
         device=device,
         load_text_encoder_in_8bit=load_text_encoder_in_8bit,
+        model_source=model_source,
     )
 
     # Process videos using the dedicated function

@@ -70,16 +70,7 @@ from navsim.common.dataloader import SceneLoader
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
 
 # ---------------- Config constants ----------------
-script_path = os.path.abspath(__file__)
-script_dir = os.path.dirname(script_path)
-CONFIG_PATH = os.path.join(
-    script_dir,  
-    "../../",    
-    "planning",
-    "script",
-    "config",
-    "training"
-)
+CONFIG_PATH = "navsim/planning/script/config/training"
 CONFIG_NAME = "default_training"
 
 logger = get_logger("unified_trainer")
@@ -88,7 +79,7 @@ logger.setLevel(LOG_LEVEL)
 
 
 # ===========================
-# Prompt builder
+# Prompt builder (按你规则)
 # ===========================
 NAV_CMDS = ['turn left', 'go straight', 'turn right']
 
@@ -109,12 +100,12 @@ def _resize_to_multiple(img: torch.Tensor, multiple: int = 32) -> torch.Tensor:
     else:
         raise ValueError(f"Unexpected img shape {img.shape}")
 
-def _resize_to_hw(img: torch.Tensor, height: int = 768, width: int = 1344) -> torch.Tensor:
+def _resize_to_hw(img: torch.Tensor, height: int = 704, width: int = 1280) -> torch.Tensor:
     """
-    Supports:
+    支持:
       - (C,H,W)
-      - (T,C,H,W) where T is treated as batch dimension
-    Fixed resize to (height, width); returns directly if already at this size.
+      - (T,C,H,W)  其中 T 当作 batch 维
+    固定 resize 到 (height, width)；如果已是该尺寸则直接返回。
     """
     if img.dim() == 3:  # (C,H,W)
         _, H, W = img.shape
@@ -147,9 +138,8 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
                        speed_mps: float,
                        acc_mps2: float) -> str:
     """
-    Args:
-        hist_xyh: (T_hist, 3) Last frame ~ (0,0,0), first frame is the earliest history
-        Uses absolute values from first frame for total_* / yaw
+    hist_xyh: (T_hist, 3)  最后一帧 ~ (0,0,0)，第一帧为最早历史
+    total_* / yaw 采用第一帧绝对值（你的要求）
     """
     h = hist_xyh.detach().cpu()
     x0, y0, th0 = h[0].tolist()
@@ -158,7 +148,7 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
     total_lateral  = abs(float(y0))
     net_yaw_change = abs(float(th0))  # rad
 
-    # Speed classification
+    # 速度档位
     if speed_mps < 5.0:
         speed_desc = "at low speed"
     elif speed_mps < 15.0:
@@ -166,10 +156,10 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
     else:
         speed_desc = "at highway speed"
 
-    # Stability (acceleration)
+    # 稳定性（加速度）
     stability_desc = "steady motion" if acc_mps2 < 0.5 else "gradually changing speed"
 
-    # Command -> text description
+    # 指令 -> 文案
     cmd = one_hot_to_cmd(high_cmd_one_hot).lower()
     if "left" in cmd:
         motion_trend, turning_desc = "turning left", "with controlled steering"
@@ -202,12 +192,12 @@ def _to_chw_float_tensor(img_rgb_uint8: np.ndarray, normalize="[-1,1]") -> torch
 
 class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
     """
-    Allows two forms to coexist in cache:
-      1) features["images"] is already a (T,C,H,W) Tensor - returns directly
-      2) features["image_paths"] is List[str|Path] - lazy loads to Tensor in __getitem__
-    Similar for targets:
-      - targets["future_frames"] is directly (Tf,C,H,W)
-      - or targets["future_paths"] is List[str|Path], lazy loaded
+    在缓存中允许两种形式并存：
+      1) features["images"]  已经是 (T,C,H,W) 的 Tensor —— 直接返回
+      2) features["image_paths"] 是 List[str|Path] —— 在 __getitem__ 懒加载为 Tensor
+    对 targets 也类似，支持：
+      - targets["future_frames"] 直接是 (Tf,C,H,W)
+      - 或 targets["future_paths"] 是 List[str|Path]，懒加载
     """
 
     def __init__(
@@ -218,8 +208,8 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
         log_names: List[str] | None = None,
         *,
         normalize: str = "[-1,1]",
-        min_hist_frames: int | None = None,   # Optional: pad to this length by repeating if insufficient (e.g. 8)
-        min_fut_frames: int | None = None,    # Optional: minimum future frame length (pad if needed)
+        min_hist_frames: int | None = None,   # 可选：不足时按段循环补到该长度（例如 8）
+        min_fut_frames: int | None = None,    # 可选：未来帧最少长度（需要就补）
     ):
         super().__init__(cache_path, feature_builders, target_builders, log_names)
         assert normalize in ("[-1,1]", "[0,1]")
@@ -229,23 +219,23 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
 
     def _load_one_image(self, p: Union[str, Path]) -> torch.Tensor:
         p = Path(p)
-        # Use PIL to load, then convert to RGB
+        # 统一用 PIL 读取，再转 RGB
         img = Image.open(p).convert("RGB")
         arr = np.array(img)  # (H,W,3) uint8
         return _to_chw_float_tensor(arr, normalize=self.normalize)
 
     def _maybe_load_images_from_paths(self, maybe_paths: Any) -> torch.Tensor:
         """
-        Supports:
-          - Already a Tensor: returns directly
-          - List[str|Path]: lazy loads -> (T,C,H,W) Tensor
+        支持:
+          - 已是 Tensor: 直接返回
+          - List[str|Path] : 懒加载 -> (T,C,H,W) Tensor
         """
         if isinstance(maybe_paths, torch.Tensor):
             return maybe_paths
         if isinstance(maybe_paths, (list, tuple)) and len(maybe_paths) > 0:
             imgs = [self._load_one_image(p) for p in maybe_paths]
             return torch.stack(imgs, dim=0)
-        # Empty case, return an empty Tensor as placeholder
+        # 空的情况，返回一个空 Tensor，占位
         return torch.empty(0, 3, 0, 0)
 
     def __getitem__(self, idx: int) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
@@ -277,7 +267,7 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
         return features, targets
 
 # =========================================
-# Collate: NavSim -> batch format required for training loop
+# collate：NavSim -> 训练循环所需的 batch
 # =========================================
 
 def _to_tensor(x, dtype=torch.float32):
@@ -294,23 +284,23 @@ def navsim_genie_collate_fn(
     batch: List[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]
 ):
     """
-    Input:
+    输入：
       features[i]["images"]           : (T_hist, C, H, W) in [-1,1]
       targets[i]["trajectory"]        : (L, C_action)
-      targets[i].get("future_frames"): Optional (T_fut, C, H, W) - filled by TrajectoryTargetBuilder
-    Output:
+      targets[i].get("future_frames"): 可选 (T_fut, C, H, W)  —— 由 TrajectoryTargetBuilder 填
+    输出：
       video         : (B, C, 1, T_hist, H, W)
       actions       : (B, L, C_action)
-      caption       : list[str], len=B
-      future_video  : (B, C, 1, T_fut, H, W) returned only if all items in batch have future_frames
+      caption       : list[str]，len=B
+      future_video  : (B, C, 1, T_fut, H, W)  若 batch 内人人都有 future_frames 时才返回
     """
     features_list, targets_list = zip(*batch)
 
-    # --------- Historical video -> (B,C,1,T,H,W) ----------
+    # --------- 历史视频 -> (B,C,1,T,H,W) ----------
     vids = []
     for f in features_list:
         frames = f["images"]                           # (T,C,H,W)
-        frames = _resize_to_hw(frames, height=768, width=1344)
+        frames = _resize_to_hw(frames, height=704, width=1280)
         T, C, H, W = frames.shape
         vids.append(frames.permute(1, 0, 2, 3).unsqueeze(1).unsqueeze(0).contiguous())
     video = torch.cat(vids, dim=0)                     # (B,C,1,T,H,W)
@@ -326,22 +316,22 @@ def navsim_genie_collate_fn(
         acc = float(torch.linalg.norm(acc_vec).item())
         captions.append(build_prompt_fixed(hist, cmd, spd, acc))
 
-    # --------- Action supervision ----------
+    # --------- actions 监督 ----------
     actions = torch.stack([_to_tensor(t['trajectory']) for t in targets_list], dim=0)  # (B,L,Ca)
     actions = norm_odo(actions)
 
-    # --------- Future video (optional) ----------
+    # --------- 未来视频（可选） ----------
     have_all_future = all(('future_frames' in t and t['future_frames'] is not None) for t in targets_list)
     if have_all_future:
         fut_vids = []
         for t in targets_list:
             fut = t['future_frames']                   # (Tf,C,H,W)
-            fut = _resize_to_hw(fut, height=768, width=1344)
+            fut = _resize_to_hw(fut, height=704, width=1280)
             Tf, C, H, W = fut.shape
             fut_vids.append(fut.permute(1, 0, 2, 3).unsqueeze(1).unsqueeze(0).contiguous())
         future_video = torch.cat(fut_vids, dim=0)      # (B,C,1,Tf,H,W)
 
-    # --------- Add: batch metadata as well ----------
+    # --------- 新增：把元信息也 batch 化返回 ----------
     hist_trajs = torch.stack([_to_tensor(f['history_trajectory']) for f in features_list], dim=0)  # (B,Th,3)
     cmds = torch.stack([_to_tensor(f['driving_command']) for f in features_list], dim=0)           # (B,C_cmd)
     vels = torch.stack([_to_tensor(f['vel']) for f in features_list], dim=0)   # (B,2)
@@ -376,9 +366,8 @@ def denorm_odo(normalized_trajectory: torch.Tensor) -> torch.Tensor:
 
 def _pad_to_8n1(x_5d: torch.Tensor) -> torch.Tensor:
     """
-    Args:
-        x_5d: (B*, C, T, H, W) sequential frames
-    Returns T' satisfying 8n+1; pads tail by repeating last frame.
+    x_5d: (B*, C, T, H, W) —— 顺序序列
+    返回 T' 满足 8n+1；尾部用最后一帧 repeat。
     """
     T = x_5d.shape[2]
     need = (1 - (T % 8)) % 8  # 使得 (T + need) % 8 == 1
@@ -390,25 +379,25 @@ def _pad_to_8n1(x_5d: torch.Tensor) -> torch.Tensor:
 
 def _to_8n1(video_5d: torch.Tensor, ctx_5d: torch.Tensor = None):
     """
-    Args:
-        video_5d: (B*V, C, T, H, W) future sequence
-        ctx_5d: (B*V, C, 1, H, W) context (last historical frame), can be None
-    Returns: (B*V, C, T', H, W) where T' satisfies 8n+1
+    video_5d: (B*V, C, T, H, W)    —— 未来序列
+    ctx_5d  : (B*V, C, 1, H, W)    —— 上下文（历史最后一帧），可为 None
+
+    返回: (B*V, C, T', H, W)，其中 T' 满足 8n+1
     """
     assert video_5d.dim() == 5
     if ctx_5d is not None:
         assert ctx_5d.shape[:2] == video_5d.shape[:2] and ctx_5d.shape[3:] == video_5d.shape[3:]
-        video_5d = torch.cat([ctx_5d, video_5d], dim=2)   # First add 1 frame of context
+        video_5d = torch.cat([ctx_5d, video_5d], dim=2)   # 先加 1 帧上下文
 
     T = video_5d.shape[2]
-    r = (1 - (T % 8)) % 8            # Number of frames to pad so that (T + r) % 8 == 1
+    r = (1 - (T % 8)) % 8            # 需要补的帧数，使得 (T + r) % 8 == 1
     if r > 0:
         tail = video_5d[:, :, -1:, :, :].repeat(1, 1, r, 1, 1)
         video_5d = torch.cat([video_5d, tail], dim=2)
     return video_5d
 
 # ===========================
-# Unified Trainer
+# 统一 Trainer（重写版）
 # ===========================
 class State:
     seed: int = None
@@ -427,22 +416,20 @@ class State:
 
 class UnifiedTrainer:
     """
-    - Data: from NavSim (SceneLoader/Dataset built in prepare_dataset/prepare_val_dataset)
-    - Model/training loop: follows diffusion training logic (video/action branches, flow matching, accelerate)
-    - Text: captions generated by collate using fixed template
+    - 数据：来自 NavSim（prepare_dataset/prepare_val_dataset 内构建 SceneLoader/Dataset）
+    - 模型/训练循环：沿用你之前的扩散训练逻辑（视频/动作分支、flow matching、accelerate）
+    - 文本：caption 由 collate 用固定模板生成
     """
 
     def __init__(self, cfg,config_file):
         """
-        Args:
-            cfg: Hydra training configuration, must include:
-              - navsim paths and split:
-                  navsim_log_path, sensor_blobs_path, train_logs, val_logs,
-                  train_test_split.scene_filter, cache_path, force_cache_computation
-              - dataloader.params: {batch_size, num_workers, ...}
-              - genie_config: model/optimization yaml path
-              - output_dir, logging_dir, mixed_precision, gradient_accumulation_steps, etc.
-            config_file: Path to model configuration YAML file
+        cfg：你的 hydra 训练配置，需包含：
+          - navsim 路径与 split：
+              navsim_log_path, sensor_blobs_path, train_logs, val_logs,
+              train_test_split.scene_filter, cache_path, force_cache_computation
+          - dataloader.params: {batch_size, num_workers, ...}
+          - genie_config: 模型/优化相关 yaml 路径（沿用你的 genie 配置）
+          - output_dir, logging_dir, mixed_precision, gradient_accumulation_steps, etc.
         """
         self.cfg = cfg
 
@@ -469,7 +456,7 @@ class UnifiedTrainer:
         self._init_directories()
 
         self.args.enable_val = getattr(self.args, "enable_val", False)
-        # Logging & save directory
+        # 日志 & 保存目录
         if self.state.accelerator.is_main_process:
             start_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
             self.save_folder = os.path.join(self.cfg.output_dir, start_time)
@@ -477,7 +464,7 @@ class UnifiedTrainer:
         else:
             self.save_folder = self.cfg.output_dir
 
-    # -------- Initialization ----------
+    # -------- 初始化 ----------
     def _init_distributed(self):
         logging_dir = Path(self.cfg.output_dir, "./logging_dir")
         project_config = ProjectConfiguration(project_dir=self.cfg.output_dir, logging_dir=logging_dir)
@@ -539,7 +526,7 @@ class UnifiedTrainer:
             Path(self.cfg.output_dir).mkdir(parents=True, exist_ok=True)
             self.state.output_dir = self.cfg.output_dir
 
-    # -------- Dataset Construction ----------
+    # -------- 数据集构建 ----------
     def prepare_dataset(self):
         logger.info("Building NavSim training dataset")
         #agent: AbstractAgent = instantiate(self.cfg.agent)
@@ -632,7 +619,7 @@ class UnifiedTrainer:
         )
         logger.info(f"Val samples: {len(self.val_dataset)}")
 
-    # -------- Models/Optimizers etc. ----------
+    # -------- 模型/优化器等 ----------
     def prepare_models(self):
         logger.info("Initializing models")
         device = self.state.accelerator.device
@@ -689,7 +676,7 @@ class UnifiedTrainer:
         if self.state.accelerator.is_main_process:
             def _format_param(name: str, p: torch.nn.Parameter) -> str:
                 try:
-                    shape_str = str(tuple(p.shape))  # e.g. "(512, 2048)"
+                    shape_str = str(tuple(p.shape))  # 例如 "(512, 2048)"
                 except Exception:
                     shape_str = "<no-shape>"
                 try:
@@ -769,47 +756,8 @@ class UnifiedTrainer:
     def prepare_trackers(self):
         self.state.accelerator.init_trackers("navsim_train", config=self.args.__dict__)
 
-    def _create_first_frame_conditioning_mask(
-        self, batch_size: int, sequence_length: int, height: int, width: int, device: torch.device
-    ) -> Tensor:
-        """Create conditioning mask for first frame conditioning.
 
-        Returns:
-            Boolean mask where True indicates first frame tokens (if conditioning is enabled)
-        """
-        conditioning_mask = torch.zeros(batch_size, sequence_length, dtype=torch.bool, device=device)
-
-        first_frame_conditioning_p = 1
-        if (
-            first_frame_conditioning_p > 0
-            and random.random() < first_frame_conditioning_p
-        ):
-            first_frame_end_idx = height * width
-            if first_frame_end_idx < sequence_length:
-                conditioning_mask[:, :first_frame_end_idx] = True
-
-        return conditioning_mask
-
-    def _create_timesteps_from_conditioning_mask(
-        self, conditioning_mask: Tensor, sampled_timestep_values: Tensor
-    ) -> Tensor:
-        """Create timesteps based on conditioning mask.
-
-        Args:
-            conditioning_mask: Boolean mask of shape (batch_size, sequence_length),
-            where True = conditioning, False = target.
-            sampled_timestep_values: Sampled timestep values for target tokens of shape (batch_size,)
-
-        Returns:
-            Timesteps tensor with 0 for conditioning tokens, sampled values for target tokens
-        """
-        # Expand sampled values to match conditioning mask shape
-        expanded_timesteps = sampled_timestep_values.unsqueeze(1).expand_as(conditioning_mask)
-
-        # Use conditioning mask to select between 0 (conditioning) and sampled values (target)
-        return torch.where(conditioning_mask, 0, expanded_timesteps)
-
-    # -------- Training ----------
+    # -------- 训练 ----------
     def train(self):
         logger.info("Starting training")
         logger.info("Memory before: %s", json.dumps(get_memory_statistics(), indent=2))
@@ -844,13 +792,13 @@ class UnifiedTrainer:
                 logs = {}
                 with accel.accumulate(self.diffusion_model):
                     # ---------------------------
-                    # 1) Get historical frames and optional future frames
+                    # 1) 取历史帧与可选未来帧
                     # ---------------------------
                     video = batch['video'].to(accel.device, dtype=weight_dtype).contiguous()   # (B,C,1,T_hist,H,W)
                     b, c, v, t, h, w = video.shape
                     assert t == 4
                     video = rearrange(video, 'b c v t h w -> (b v) c t h w')                   # (B*V,C,T_hist,H,W)
-                    mem = video                                                                # Input hist is 4 frames
+                    mem = video                                                                # 这里你的输入 hist 就是 8 帧
 
                     future_video = batch['future_video'].to(accel.device, dtype=weight_dtype).contiguous()  # (B,C,1,T_fut,H,W) torch.Size([16, 3, 1, 8, 1088, 1920])
                     future_video = rearrange(future_video, 'b c v t h w -> (b v) c t h w')
@@ -877,17 +825,17 @@ class UnifiedTrainer:
                     latents = rearrange(latents, 'b c f h w -> b (f h w) c')
 
 
-                    cmd_onehot = batch['driving_command'].to(accel.device, dtype=weight_dtype)      # (B,Ccmd)
-                    vel = batch['vel'].to(accel.device, dtype=weight_dtype)                    # (B,2)
-                    acc_vec = batch['acc'].to(accel.device, dtype=weight_dtype)                # (B,2)
+                    # cmd_onehot = batch['driving_command'].to(accel.device, dtype=weight_dtype)      # (B,Ccmd)
+                    # vel = batch['vel'].to(accel.device, dtype=weight_dtype)                    # (B,2)
+                    # acc_vec = batch['acc'].to(accel.device, dtype=weight_dtype)                # (B,2)
 
-                    context_dict = {
-                        "cmd_onehot": cmd_onehot,
-                        "vel": vel,
-                        "acc": acc_vec,
-                    }
+                    # context_dict = {
+                    #     "cmd_onehot": cmd_onehot,
+                    #     "vel": vel,
+                    #     "acc": acc_vec,
+                    # }
                     # ---------------------------
-                    # 2) Text conditioning (with dropout)
+                    # 2) 文本条件（带 dropout）
                     # ---------------------------
                     captions = batch['caption']
                     dropout_factor = torch.rand(b, device=accel.device, dtype=weight_dtype)
@@ -900,7 +848,7 @@ class UnifiedTrainer:
 
 
                     # ---------------------------
-                    # 4) Flow-matching (video side, only for noise/timestep generation; video loss not computed)
+                    # 4) flow-matching（视频侧，仅用于造噪声/时步；可不算视频损失）
                     # ---------------------------
                     # action_weights = compute_density_for_timestep_sampling(
                     #     weighting_scheme=self.args.flow_weighting_scheme,
@@ -919,7 +867,7 @@ class UnifiedTrainer:
                     )  # set initial frames noise to 0
 
                     noisy_latents = noise
-                    sigmas_vec = self._timestep_sampler.sample_for(noisy_latents)   # Required timestep sampling
+                    sigmas_vec = self._timestep_sampler.sample_for(noisy_latents)   # <== 你要求必须要有的这一行
                     sigmas = sigmas_vec                                            # (b,)
                     timesteps = torch.round(sigmas_vec * 1000.0).long()            # (b,)
 
@@ -941,20 +889,43 @@ class UnifiedTrainer:
 
                     actions = batch['actions'].to(accel.device, dtype=weight_dtype)            # (B,L,Ca)
                     action_dim = actions.shape[-1]
-                    noise_actions = randn_tensor(actions.shape, device=accel.device, dtype=weight_dtype)
-                    
+
+                    plan_anchor_bk = self.diffusion_model.plan_anchor.unsqueeze(0).repeat(b, 1, 1, 1) # 20 8 2 -> 1 20 8 2
+                    B, K, T, C2 = plan_anchor_bk.shape
+                    assert (K, T, C2) == (20, 8, 2), f"期望 (B,20,8,2)，拿到 {plan_anchor_bk.shape}"
+
+                    anchor_norm_bk = self.norm_odo(plan_anchor_bk)  # (B,20,8,3)
+
+                    #noise_actions = randn_tensor(actions.shape, device=accel.device, dtype=weight_dtype)
+                    noise_bk = torch.randn_like(anchor_norm_bk)
+
                     t_actions = self._timestep_sampler.sample_for(actions)            # (B,)
                     t_actions = t_actions.clamp(0.0, 1.0)
 
-                    t_b11        = t_actions.view(-1, 1, 1)                           # (B,1,1)
-                    noisy_actions = (1.0 - t_b11) * actions + t_b11 * noise_actions   # (B, L, Ca)
+                    t_bk11 = t_actions.view(B, 1, 1, 1).expand(B, K, T, 1)
+
+                    xt_norm_bk = (1.0 - t_bk11) * anchor_norm_bk + t_bk11 * noise_bk   # (B,20,8,2)
+
+                    vel_target_bk = noise_bk - anchor_norm_bk                           # (B,20,8,3)
 
                     NUM_T_STEPS = getattr(self.scheduler.config, "num_train_timesteps", 1000)
                     action_timesteps = torch.round(t_actions * 1000).long()       # (B,)
-                    action_timesteps = action_timesteps.unsqueeze(-1).expand(-1, actions.shape[1])  # (B, L)
+                    action_timesteps = action_timesteps.unsqueeze(-1).expand(-1, K)     # (B, 20)
 
-                    action_loss_weight = 1.0
+                    xt_norm_flat = xt_norm_bk.reshape(B * K, T, C2)                       # (B*K, 8, 2)
+                    vel_target_flat = vel_target_bk.reshape(B * K, T, C2)                 # (B*K, 8, 2)
+                    action_timestep_flat = action_timesteps.reshape(B * K, )             # (B*K,)
+                    action_timestep_flat = action_timestep_flat.unsqueeze(-1).expand(-1, T)  # (B*K, 8)
 
+                    cmd_onehot = batch['driving_command'].to(accel.device, dtype=weight_dtype)  # (B,Ccmd)
+                    vel = batch['vel'].to(accel.device, dtype=weight_dtype)                     # (B,2)
+                    acc_vec = batch['acc'].to(accel.device, dtype=weight_dtype)                 # (B,2)
+
+                    context_dict = {
+                        "cmd_onehot": cmd_onehot.repeat_interleave(K, dim=0),   # (B*K, Ccmd)
+                        "vel":        vel.repeat_interleave(K, dim=0),          # (B*K, 2)
+                        "acc":        acc_vec.repeat_interleave(K, dim=0),      # (B*K, 2)
+                    }
 
                     pred_all = self._forward_pass(
                         latents=noisy_latents.to(accel.device, dtype=weight_dtype),
@@ -964,22 +935,36 @@ class UnifiedTrainer:
                         latent_frames=latent_frames,
                         latent_height=latent_height,
                         latent_width=latent_width,
-                        return_video=self.args.return_video or self.args.return_action,                     # Do not return video prediction
-                        return_action=self.args.return_action,                     # Only return action
+                        return_video=self.args.return_video or self.args.return_action,                     # 不回传视频预测
+                        return_action=self.args.return_action,                     # 只回传动作
                         video_attention_mask=None,
-                        action_timestep=action_timesteps,
-                        action_states=noisy_actions.to(accel.device, dtype=weight_dtype),
-                        action_dim=action_dim,
+                        action_timestep=action_timestep_flat,
+                        action_states=xt_norm_flat.to(accel.device, dtype=weight_dtype),
+                        action_dim=2,
                         context_dict=context_dict,
                     )
-                    pred_vel = pred_all['action']                                              # (B, L, Ca)
+                    pred_vel_flat = pred_all['action']           # (B*K,8,3)  <== 3 维 velocity 预测（xy 的 FM + 额外 heading 通道）
+                    pred_logits_flat = pred_all['action_logits'] # (B*K,1)
 
-                    # ---------------------------
-                    # 7) Loss (action)
-                    # ---------------------------
-                    target_vel = noise_actions - actions
-                    loss_action = ((pred_vel - target_vel).pow(2)).mean()
-                    loss = loss_action
+                    # 还原回 (B, K, ...)
+                    pred_vel_bk   = pred_vel_flat.view(B, K, T, 3)   # (B,20,8,3)
+                    pred_cls_bk   = pred_logits_flat.view(B, K)      # (B,20)
+
+                    # ====== (D) 损失 ======
+                    # 1) FM（只对 xy 两个通道做监督；heading 先不监督）
+                    loss_vel = F.mse_loss(pred_vel_bk[..., :2], vel_target_bk, reduction='mean')
+
+                    # 2) 多模分类：用 GT 轨迹与锚点的 (x,y) 距离选择正样本（与 diffusiondrive 一致）
+                    target_traj = batch["actions"].to(accel.device, dtype=weight_dtype)   # (B,8,3)
+                    dist = torch.linalg.norm(target_traj[:, None, :, :2] - plan_anchor_bk[:, :, :, :2], dim=-1).mean(dim=-1)  # (B,20)
+                    mode_idx = torch.argmin(dist, dim=-1)  # (B,)
+                    target_onehot = torch.zeros_like(pred_cls_bk).to(pred_cls_bk.dtype)
+                    target_onehot.scatter_(1, mode_idx.unsqueeze(1), 1.)
+                    loss_cls = py_sigmoid_focal_loss(pred_cls_bk, target_onehot, gamma=2.0, alpha=0.25, reduction='mean')
+
+                    # 3) 总损失（保持你原来的权重习惯）
+                    loss = 0.8 * loss_vel + 1.0 * loss_cls 
+
                     assert not torch.isnan(loss), "NaN loss detected"
                     accel.backward(loss)
                     if accel.sync_gradients and accel.distributed_type != DistributedType.DEEPSPEED:
@@ -1003,10 +988,10 @@ class UnifiedTrainer:
                 if (global_step % self.args.steps_to_log == 0) or (step == 0):
                     accel.log(logs, step=global_step)
                     if accel.is_main_process:
-                        # Optional: also log to console
+                        # 可选：控制台也打一条
                         logger.info(f"[step {global_step}] loss={logs['loss']:.4f}, lr={logs['lr']:.6g}")
 
-                # Validation
+                # 验证
                 if (self.args.enable_val 
                     and self.val_dataloader is not None 
                     and global_step % self.args.steps_to_val == 0):
@@ -1014,7 +999,7 @@ class UnifiedTrainer:
                     model_save_dir = os.path.join(self.save_folder, f'Validation_step_{global_step}')
                     self.validate(accel, model_save_dir, global_step)
                     accel.wait_for_everyone() 
-                # Save checkpoint
+                # 保存
                 if global_step % self.args.steps_to_save == 0 and accel.is_main_process:
                     model_to_save = unwrap_model(accel, self.diffusion_model)
                     model_save_dir = os.path.join(self.save_folder, f'step_{global_step}')
@@ -1043,7 +1028,7 @@ class UnifiedTrainer:
                       return_video, return_action, video_attention_mask,
                       action_timestep=None, action_states=None, action_dim=None,
                       context_dict = None,rope_interpolation_scale=None):
-        """Thin wrapper, compatible with utils.forward_pass interface/return."""
+        """薄封装，兼容你 utils.forward_pass 的接口/返回。"""
         return forward_pass(
             model=self.diffusion_model,
             timesteps=timesteps,
@@ -1065,9 +1050,8 @@ class UnifiedTrainer:
     @staticmethod
     def _tensor_video_to_pils(video: torch.Tensor):
         """
-        Args:
-            video: (T,C,H,W) in [-1,1] or [0,1]
-        Returns: List[PIL.Image]
+        video: (T,C,H,W) in [-1,1] 或 [0,1]
+        return: List[PIL.Image]
         """
         x = video.detach().cpu()
         if x.min() < 0:
@@ -1082,36 +1066,35 @@ class UnifiedTrainer:
     
     def _pad_to_8n1(self, x_5d: torch.Tensor) -> torch.Tensor:
         """
-        Args:
-            x_5d: (B*, C, T, H, W) sequential frames
-        Returns T' satisfying 8n+1; pads tail by repeating last frame.
+        x_5d: (B*, C, T, H, W) —— 顺序序列
+        返回 T' 满足 8n+1；尾部用最后一帧 repeat。
         """
         T = x_5d.shape[2]
-        need = (1 - (T % 8)) % 8  # Ensures (T + need) % 8 == 1
+        need = (1 - (T % 8)) % 8  # 使得 (T + need) % 8 == 1
         if need > 0:
             tail = x_5d[:, :, -1:, :, :].repeat(1, 1, need, 1, 1)
             x_5d = torch.cat([x_5d, tail], dim=2)
         return x_5d
 
-    # -------- Validation ----------
+    # -------- 验证 ----------
     @torch.inference_mode()
     def validate(self, accelerator, model_save_dir, global_step):
         """
-        Validate action using current NavSim collate format:
-        - Conditional input: all historical frames from batch['video']
-        - Target: batch['actions']
-        - Metric: MSE(L2) across entire validation set
-        - Output: save pred / gt to model_save_dir
+        使用 NavSim collate 的当前格式进行动作验证：
+        - 条件输入：batch['video'] 的全部历史帧
+        - 目标：batch['actions']
+        - 指标：全验证集的 MSE(L2)
+        - 产物：保存 pred / gt 到 model_save_dir
         """
         os.makedirs(model_save_dir, exist_ok=True)
 
-        # Pipeline (unwrap deepspeed wrapper)
+        # pipeline（解包 deepspeed wrapper）
         pipe = self.pipeline_class(
             self.scheduler, self.vae, self.text_encoder, self.tokenizer,
             unwrap_model(accelerator, self.diffusion_model) if accelerator is not None else self.diffusion_model
         )
 
-        # Inference base hyperparameters (keep existing config fields)
+        # 推理基础超参（保留你现有 config 的字段即可）
         num_steps   = 5
         guidance    = float(getattr(self.args, "guidance_scale", 1.0))
         pixel_wise  = bool(getattr(self.args, "pixel_wise_timestep", True))
@@ -1128,8 +1111,6 @@ class UnifiedTrainer:
 
         total_mse = 0.0
         total_count = 0
-        total_l1  = 0.0 
-
 
         pbar = tqdm(
             total=len(self.val_dataloader),
@@ -1139,11 +1120,11 @@ class UnifiedTrainer:
         )
 
         for batch in self.val_dataloader:
-            # Historical conditioning: (B,C,1,T,H,W) -> (B,C,T,H,W)
+            # 历史条件：(B,C,1,T,H,W) -> (B,C,T,H,W)
             video = batch['video']  # shape (B,C,1,T_hist,H,W)
             B, C, V, T_hist, H, W = video.shape
             assert T_hist == 4
-            assert V == 1, f"Current validation assumes single view, got V={V}"
+            assert V == 1, f"当前验证假设单视角，拿到 V={V}"
 
             prompts = batch['caption']            # list[str], len=B
             gt_actions = batch['actions']         # (B,L,Ca)
@@ -1178,17 +1159,17 @@ class UnifiedTrainer:
                 out = pipe.infer(
                     conditions=[condition],
                     prompt=prompt_i,
-                    negative_prompt=negative_prompt,          # Optional
+                    negative_prompt=negative_prompt,          # 可选
                     num_inference_steps=num_steps,
                     guidance_scale=1.0,
-                    height=768,
-                    width=1344,
+                    height=704,
+                    width=1280,
                     generator=generator,
                     num_frames=18,
                     output_type = "latent",
                     return_action=True,
-                    return_video=False,          # Only return action
-                    action_chunk=action_chunk,   # Align with GT
+                    return_video=False,          # 只要动作
+                    action_chunk=action_chunk,   # 与 GT 对齐
                     action_dim=action_dim,
                     context_dict=context_dict,
                     pixel_wise_timestep = self.args.pixel_wise_timestep,
@@ -1196,7 +1177,7 @@ class UnifiedTrainer:
                     image_cond_noise_scale=0.0
                 )
 
-                # Extract predicted action, convert to (T,C) on cpu
+                # 取出预测动作，统一成 (T,C) on cpu
                 if isinstance(out, (list, tuple)):
                     out = out[0]
                 if isinstance(out, dict):
@@ -1206,41 +1187,29 @@ class UnifiedTrainer:
                 pred_action = torch.as_tensor(pred_action).detach().float().cpu()
                 if pred_action.ndim == 3:  # (B,T,C) -> (T,C)
                     pred_action = pred_action[0]
-
                 pred_action = pred_action
                 pred_action = denorm_odo(pred_action)
                 gt_i = denorm_odo(gt_actions[i].detach().float().cpu())
+                mse  = ((pred_action - gt_i)**2).mean().item()
 
-                mse_i  = ((pred_action - gt_i)**2).mean().item()
-                l1_i  = (pred_action - gt_i).abs().mean().item()  
-
-                total_mse += mse_i
-                total_l1  += l1_i          
+                total_mse += mse
                 total_count += 1
             
             if accelerator.is_main_process:
-                cur_mean_mse = total_mse / max(total_count, 1)
-                cur_mean_l1  = total_l1  / max(total_count, 1)    # <<< NEW
-                pbar.set_postfix_str(f"mean_l2={cur_mean_mse:.4f}, mean_l1={cur_mean_l1:.4f}")  # <<< NEW
+                cur_mean = total_mse / total_count
+                pbar.set_postfix_str(f"mean_mse={cur_mean:.4f}")
                 pbar.update(1)
-
+        
         pbar.close()
-
-        # Reduce three values: mse, l1, count
-        local_sum = torch.tensor([total_mse, total_l1, float(total_count)], device=accelerator.device, dtype=torch.float32)  # <<< NEW
+        local_sum = torch.tensor([total_mse, total_count], device=accelerator.device, dtype=torch.float32)
         global_sum = accelerator.reduce(local_sum, reduction="sum")
-        denom = torch.clamp(global_sum[2], min=1.0)  # count
-        mean_mse = (global_sum[0] / denom).item()
-        mean_l1  = (global_sum[1] / denom).item()    # <<< NEW
-
+        mean_mse = (global_sum[0] / torch.clamp(global_sum[1], min=1)).item()
         if accelerator.is_main_process:
-            accelerator.log({"val/action_l2": mean_mse, "val/action_l1": mean_l1}, step=global_step)  # <<< NEW
+            accelerator.log({"val/action_l2": mean_mse}, step=global_step)
             print("val/action_l2", mean_mse)
-            print("val/action_l1", mean_l1)  # <<< NEW
 
         return {
             "val_action_l2": mean_mse,
-            "val_action_l1": mean_l1,  # <<< NEW
         }
 
 
@@ -1356,9 +1325,7 @@ def get_rope_scale_factors(fps: float) -> list[float]:
 # ===========================
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, 'configs', 'ltx_model', 'video_model_infer_navsim.yaml')
-    trainer = UnifiedTrainer(cfg, config_path)
+    trainer = UnifiedTrainer(cfg,'navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim_stage1.yaml')
     trainer.prepare_dataset()
     trainer.prepare_val_dataset()
     trainer.prepare_models()

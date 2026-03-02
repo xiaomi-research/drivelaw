@@ -25,11 +25,11 @@ class VideoDriveFeatureBuilder(AbstractFeatureBuilder):
         prompt_frames: int = 9,
         normalize: str = "[-1,1]",
         ltx_min_prompt_frames: int = 8,
-        view_mode: str = "front",   # "front" or "surround6"
+        view_mode: str = "front",   # "front", "surround6", or "surround8"
         surround_keys: Sequence[str] = (
             "cam_l0", "cam_f0", "cam_r0",
             "cam_l2", "cam_b0", "cam_r2",
-        ),
+        ),  # default 6 views; can be overridden to 8 via parameter
         surround_grid: Tuple[int, int] = (2, 3),
     ):
         self.prompt_frames = prompt_frames
@@ -56,7 +56,7 @@ class VideoDriveFeatureBuilder(AbstractFeatureBuilder):
         return "rgb", img
 
     def _grab_surround(self, cams):
-        # Returns ("path", [6 paths]) or ("rgb", mosaic RGB)
+        # Return ("path", [paths]) or ("rgb", mosaic RGB image).
         items = []
         modes = []
         for key in self.surround_keys:
@@ -72,19 +72,20 @@ class VideoDriveFeatureBuilder(AbstractFeatureBuilder):
                 if color_space.upper() == "BGR" or (img[..., 0].mean() > img[..., 2].mean()):
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 items.append(img)
-        # If all are paths, return path list directly; otherwise create mosaic
+        # If all are paths, return the list directly; otherwise build a mosaic.
         if all(m == "path" for m in modes):
             return "path", items
         else:
-            # Create 2x3 mosaic from non-path ndarrays
+            # Horizontally concatenate non-path arrays into a single-row mosaic (1xN), matching training code.
             imgs = [x if isinstance(x, np.ndarray) else cv2.imread(x) for x in items]
-            # Align sizes (use first image as reference)
+            # Align sizes to the first image, then resize each view to the target size.
             h0, w0 = imgs[0].shape[:2]
-            imgs = [cv2.resize(im, (w0, h0), interpolation=cv2.INTER_AREA) for im in imgs]
-            row1 = np.concatenate(imgs[0:3], axis=1)
-            row2 = np.concatenate(imgs[3:6], axis=1)
-            mosaic = np.concatenate([row1, row2], axis=0)
-            return "rgb", mosaic
+            # Target per-view size: 512x256 (W x H).
+            target_w, target_h = 512, 256
+            imgs = [cv2.resize(im, (target_w, target_h), interpolation=cv2.INTER_AREA) for im in imgs]
+            # Horizontal concatenation: single row of views.
+            pano = np.concatenate(imgs, axis=1)  # (H, N*W, 3)
+            return "rgb", pano
 
     def _to_chw_tensor(self, img_rgb_uint8: np.ndarray) -> torch.Tensor:
         img = img_rgb_uint8.astype(np.float32) / 255.0
@@ -105,7 +106,7 @@ class VideoDriveFeatureBuilder(AbstractFeatureBuilder):
         start = num_hist - T_raw
         idx_range = range(start, num_hist)
 
-        # ==== Front view / Surround view modes handled separately ====
+        # Handle "front" versus surround modes separately.
         paths_front: List[str] = []
         paths_surround: List[List[str]] = []
         imgs_tensor: List[torch.Tensor] = []
@@ -120,29 +121,35 @@ class VideoDriveFeatureBuilder(AbstractFeatureBuilder):
                     paths_front.append(item)
                 else:
                     imgs_tensor.append(self._to_chw_tensor(item))
-            else:  # surround6
+            else:  # surround6 or surround8
                 mode, item = self._grab_surround(cams)
                 if mode == "path":
                     saw_path = True
-                    paths_surround.append(item)  # List[str] length 6
+                    paths_surround.append(item)  # List[str] of length 6 or 8
                 else:
                     imgs_tensor.append(self._to_chw_tensor(item))
 
         out: Dict[str, Any] = {}
 
         if saw_path:
-            # If any frame exists as path, return as paths without tensor stacking
+            # If any frame is represented by paths, return paths without stacking tensors.
             if self.view_mode == "front":
                 out["image_paths"] = paths_front                     # List[str]
             else:
-                out["image_paths"] = paths_surround         # List[List[str]] 6 views per frame
+                out["image_paths"] = paths_surround         # List[List[str]] per-frame multi-view paths
         else:
-            # All in-memory images -> stack tensors and resize
-            images = torch.stack(imgs_tensor, dim=0)  # (T,C,H,W)
-            images = _resize_to_hw(images, 768, 1344)
+            # All images are in memory: stack into tensor and resize.
+            images = torch.stack(imgs_tensor, dim=0)  # (T, C, H, W)
+            # Set resize dimensions based on view_mode.
+            if self.view_mode == "surround6":
+                # Multi-view: horizontally concatenated views, each resized to 512x256.
+                images = _resize_to_hw(images, 256, 3072)
+            else:
+                # Single-view: 1280x704.
+                images = _resize_to_hw(images, 704, 1280)
             out["images"] = images
 
-        # ===== Rest of context remains unchanged =====
+        # Remaining context kept unchanged.
         ego_statuses = agent_input.ego_statuses
         history_trajectory = torch.tensor(
             [[float(e.ego_pose[0]), float(e.ego_pose[1]), float(e.ego_pose[2])] for e in ego_statuses[:4]],
@@ -172,7 +179,7 @@ class TrajectoryTargetBuilder(AbstractTargetBuilder):
         surround_keys: Sequence[str] = (
             "cam_l0", "cam_f0", "cam_r0",
             "cam_l2", "cam_b0", "cam_r2",
-        ),
+        ),  # default 6 views; can be overridden to 8 via parameter
         surround_grid: Tuple[int, int] = (2, 3),
         out_hw: Tuple[int, int] | None = None,
     ):
@@ -217,14 +224,14 @@ class TrajectoryTargetBuilder(AbstractTargetBuilder):
         if all(m == "path" for m in modes):
             return "path", items
         else:
-            # Mosaic consistent with feature
+            # Horizontally concatenate (single row of views), consistent with feature builder.
             imgs = [x if isinstance(x, np.ndarray) else cv2.imread(x) for x in items]
-            h0, w0 = imgs[0].shape[:2]
-            imgs = [cv2.resize(im, (w0, h0), interpolation=cv2.INTER_AREA) for im in imgs]
-            row1 = np.concatenate(imgs[0:3], axis=1)
-            row2 = np.concatenate(imgs[3:6], axis=1)
-            mosaic = np.concatenate([row1, row2], axis=0)
-            return "rgb", mosaic
+            # Target per-view size: 512x256 (W x H).
+            target_w, target_h = 512, 256
+            imgs = [cv2.resize(im, (target_w, target_h), interpolation=cv2.INTER_AREA) for im in imgs]
+            # Horizontal concatenation: single row of views.
+            pano = np.concatenate(imgs, axis=1)  # (H, N*W, 3)
+            return "rgb", pano
 
     def _to_chw_tensor(self, img_rgb_uint8: np.ndarray) -> torch.Tensor:
         if self.out_hw is not None:
@@ -262,7 +269,7 @@ class TrajectoryTargetBuilder(AbstractTargetBuilder):
                 mode, item = self._grab_surround(cams)
                 if mode == "path":
                     got_path = True
-                    fut_paths_surround.append(item)  # List[str] 长度6
+                    fut_paths_surround.append(item)  # List[str] of length 6 or 8
                 else:
                     frames_tensor.append(self._to_chw_tensor(item))
 
@@ -278,10 +285,10 @@ class TrajectoryTargetBuilder(AbstractTargetBuilder):
 
 def _resize_to_hw(img: torch.Tensor, height: int = 704, width: int = 1280) -> torch.Tensor:
     """
-    Supports:
-      - (C,H,W)
-      - (T,C,H,W) where T is treated as batch dimension
-    Fixed resize to (height, width); returns directly if already at this size.
+    Supported shapes:
+      - (C, H, W)
+      - (T, C, H, W) where T is treated as a batch dimension.
+    Always resizes to (height, width); returns input directly if it already has this size.
     """
     if img.dim() == 3:  # (C,H,W)
         _, H, W = img.shape

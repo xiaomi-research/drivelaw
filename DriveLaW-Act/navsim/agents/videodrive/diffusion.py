@@ -70,7 +70,7 @@ from navsim.common.dataloader import SceneLoader
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
 
 # ---------------- Config constants ----------------
-CONFIG_PATH = "/mnt/evad_fs/worldmodel/yongkangli/navsim-1.1/navsim/planning/script/config/training"
+CONFIG_PATH = "navsim/planning/script/config/training"
 CONFIG_NAME = "default_training"
 
 logger = get_logger("unified_trainer")
@@ -79,7 +79,7 @@ logger.setLevel(LOG_LEVEL)
 
 
 # ===========================
-# Prompt builder (按你规则)
+# Prompt builder
 # ===========================
 NAV_CMDS = ['turn left', 'go straight', 'turn right']
 
@@ -102,10 +102,10 @@ def _resize_to_multiple(img: torch.Tensor, multiple: int = 32) -> torch.Tensor:
 
 def _resize_to_hw(img: torch.Tensor, height: int = 704, width: int = 1280) -> torch.Tensor:
     """
-    支持:
-      - (C,H,W)
-      - (T,C,H,W)  其中 T 当作 batch 维
-    固定 resize 到 (height, width)；如果已是该尺寸则直接返回。
+    Supported shapes:
+      - (C, H, W)
+      - (T, C, H, W) where T is treated as a batch dimension.
+    Always resizes to (height, width); returns input directly if it already has this size.
     """
     if img.dim() == 3:  # (C,H,W)
         _, H, W = img.shape
@@ -138,8 +138,9 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
                        speed_mps: float,
                        acc_mps2: float) -> str:
     """
-    hist_xyh: (T_hist, 3)  最后一帧 ~ (0,0,0)，第一帧为最早历史
-    total_* / yaw 采用第一帧绝对值（你的要求）
+    hist_xyh: (T_hist, 3) with the last frame approximately (0, 0, 0) and the first
+        frame being the earliest history.
+    total_* / yaw are computed from the absolute value of the first frame.
     """
     h = hist_xyh.detach().cpu()
     x0, y0, th0 = h[0].tolist()
@@ -148,7 +149,6 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
     total_lateral  = abs(float(y0))
     net_yaw_change = abs(float(th0))  # rad
 
-    # 速度档位
     if speed_mps < 5.0:
         speed_desc = "at low speed"
     elif speed_mps < 15.0:
@@ -156,10 +156,8 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
     else:
         speed_desc = "at highway speed"
 
-    # 稳定性（加速度）
     stability_desc = "steady motion" if acc_mps2 < 0.5 else "gradually changing speed"
 
-    # 指令 -> 文案
     cmd = one_hot_to_cmd(high_cmd_one_hot).lower()
     if "left" in cmd:
         motion_trend, turning_desc = "turning left", "with controlled steering"
@@ -195,12 +193,12 @@ def _to_chw_float_tensor(img_rgb_uint8: np.ndarray, normalize="[-1,1]") -> torch
 
 class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
     """
-    在缓存中允许两种形式并存：
-      1) features["images"]  已经是 (T,C,H,W) 的 Tensor —— 直接返回
-      2) features["image_paths"] 是 List[str|Path] —— 在 __getitem__ 懒加载为 Tensor
-    对 targets 也类似，支持：
-      - targets["future_frames"] 直接是 (Tf,C,H,W)
-      - 或 targets["future_paths"] 是 List[str|Path]，懒加载
+    Cache-only dataset with lazy image loading.
+      1) features["images"]: already a (T, C, H, W) tensor — returned as is.
+      2) features["image_paths"]: List[str | Path] — lazily loaded to a tensor in __getitem__.
+    Targets follow the same pattern:
+      - targets["future_frames"]: (Tf, C, H, W) tensor.
+      - targets["future_paths"]: List[str | Path], lazily loaded.
     """
 
     def __init__(
@@ -211,8 +209,8 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
         log_names: List[str] | None = None,
         *,
         normalize: str = "[-1,1]",
-        min_hist_frames: int | None = None,   # 可选：不足时按段循环补到该长度（例如 8）
-        min_fut_frames: int | None = None,    # 可选：未来帧最少长度（需要就补）
+        min_hist_frames: int | None = None,   # Optional: minimum history length (e.g., 8).
+        min_fut_frames: int | None = None,    # Optional: minimum future length if required.
     ):
         super().__init__(cache_path, feature_builders, target_builders, log_names)
         assert normalize in ("[-1,1]", "[0,1]")
@@ -222,23 +220,23 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
 
     def _load_one_image(self, p: Union[str, Path]) -> torch.Tensor:
         p = Path(p)
-        # 统一用 PIL 读取，再转 RGB
+        # Use PIL to read and convert to RGB.
         img = Image.open(p).convert("RGB")
         arr = np.array(img)  # (H,W,3) uint8
         return _to_chw_float_tensor(arr, normalize=self.normalize)
 
     def _maybe_load_images_from_paths(self, maybe_paths: Any) -> torch.Tensor:
         """
-        支持:
-          - 已是 Tensor: 直接返回
-          - List[str|Path] : 懒加载 -> (T,C,H,W) Tensor
+        Supported:
+          - Tensor: returned directly.
+          - List[str | Path]: lazily loaded to a (T, C, H, W) tensor.
         """
         if isinstance(maybe_paths, torch.Tensor):
             return maybe_paths
         if isinstance(maybe_paths, (list, tuple)) and len(maybe_paths) > 0:
             imgs = [self._load_one_image(p) for p in maybe_paths]
             return torch.stack(imgs, dim=0)
-        # 空的情况，返回一个空 Tensor，占位
+        # Empty input: return an empty tensor as a placeholder.
         return torch.empty(0, 3, 0, 0)
 
     def __getitem__(self, idx: int) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
@@ -270,7 +268,7 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
         return features, targets
 
 # =========================================
-# collate：NavSim -> 训练循环所需的 batch
+# Collate: NavSim -> batch for training loop
 # =========================================
 
 def _to_tensor(x, dtype=torch.float32):
@@ -287,19 +285,19 @@ def navsim_genie_collate_fn(
     batch: List[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]
 ):
     """
-    输入：
-      features[i]["images"]           : (T_hist, C, H, W) in [-1,1]
-      targets[i]["trajectory"]        : (L, C_action)
-      targets[i].get("future_frames"): 可选 (T_fut, C, H, W)  —— 由 TrajectoryTargetBuilder 填
-    输出：
-      video         : (B, C, 1, T_hist, H, W)
-      actions       : (B, L, C_action)
-      caption       : list[str]，len=B
-      future_video  : (B, C, 1, T_fut, H, W)  若 batch 内人人都有 future_frames 时才返回
+    Inputs:
+      features[i]["images"]            : (T_hist, C, H, W) in [-1, 1]
+      targets[i]["trajectory"]         : (L, C_action)
+      targets[i].get("future_frames")  : optional (T_fut, C, H, W) populated by TrajectoryTargetBuilder.
+    Outputs:
+      video        : (B, C, 1, T_hist, H, W)
+      actions      : (B, L, C_action)
+      caption      : list[str] of length B
+      future_video : (B, C, 1, T_fut, H, W) if every element in the batch has future_frames.
     """
     features_list, targets_list = zip(*batch)
 
-    # --------- 历史视频 -> (B,C,1,T,H,W) ----------
+    # History video -> (B, C, 1, T, H, W)
     vids = []
     for f in features_list:
         frames = f["images"]                           # (T,C,H,W)
@@ -308,7 +306,7 @@ def navsim_genie_collate_fn(
         vids.append(frames.permute(1, 0, 2, 3).unsqueeze(1).unsqueeze(0).contiguous())
     video = torch.cat(vids, dim=0)                     # (B,C,1,T,H,W)
 
-    # --------- caption ----------
+    # Captions
     captions = []
     for f in features_list:
         hist = f['history_trajectory']
@@ -319,11 +317,11 @@ def navsim_genie_collate_fn(
         acc = float(torch.linalg.norm(acc_vec).item())
         captions.append(build_prompt_fixed(hist, cmd, spd, acc))
 
-    # --------- actions 监督 ----------
+    # Actions supervision
     actions = torch.stack([_to_tensor(t['trajectory']) for t in targets_list], dim=0)  # (B,L,Ca)
     actions = norm_odo(actions)
 
-    # --------- 未来视频（可选） ----------
+    # Optional future video
     have_all_future = all(('future_frames' in t and t['future_frames'] is not None) for t in targets_list)
     if have_all_future:
         fut_vids = []
@@ -334,7 +332,7 @@ def navsim_genie_collate_fn(
             fut_vids.append(fut.permute(1, 0, 2, 3).unsqueeze(1).unsqueeze(0).contiguous())
         future_video = torch.cat(fut_vids, dim=0)      # (B,C,1,Tf,H,W)
 
-    # --------- 新增：把元信息也 batch 化返回 ----------
+    # Also batch meta information and return it.
     hist_trajs = torch.stack([_to_tensor(f['history_trajectory']) for f in features_list], dim=0)  # (B,Th,3)
     cmds = torch.stack([_to_tensor(f['driving_command']) for f in features_list], dim=0)           # (B,C_cmd)
     vels = torch.stack([_to_tensor(f['vel']) for f in features_list], dim=0)   # (B,2)
@@ -370,8 +368,8 @@ def denorm_odo(normalized_trajectory: torch.Tensor) -> torch.Tensor:
 
 def _pad_to_8n1(x_5d: torch.Tensor) -> torch.Tensor:
     """
-    x_5d: (B*, C, T, H, W) —— 顺序序列
-    返回 T' 满足 8n+1；尾部用最后一帧 repeat。
+    x_5d: (B*, C, T, H, W) temporal sequence.
+    Returns a tensor with T' satisfying 8n+1 by repeating the last frame at the tail.
     """
     T = x_5d.shape[2]
     need = (1 - (T % 8)) % 8  # 使得 (T + need) % 8 == 1
@@ -383,18 +381,21 @@ def _pad_to_8n1(x_5d: torch.Tensor) -> torch.Tensor:
 
 def _to_8n1(video_5d: torch.Tensor, ctx_5d: torch.Tensor = None):
     """
-    video_5d: (B*V, C, T, H, W)    —— 未来序列
-    ctx_5d  : (B*V, C, 1, H, W)    —— 上下文（历史最后一帧），可为 None
+    Ensure a temporal length that satisfies 8n+1, optionally with a context frame.
+    Args:
+        video_5d: (B*V, C, T, H, W) future sequence.
+        ctx_5d  : (B*V, C, 1, H, W) context (last history frame), or None.
 
-    返回: (B*V, C, T', H, W)，其中 T' 满足 8n+1
+    Returns:
+        (B*V, C, T', H, W) where T' satisfies 8n+1.
     """
     assert video_5d.dim() == 5
     if ctx_5d is not None:
         assert ctx_5d.shape[:2] == video_5d.shape[:2] and ctx_5d.shape[3:] == video_5d.shape[3:]
-        video_5d = torch.cat([ctx_5d, video_5d], dim=2)   # 先加 1 帧上下文
+        video_5d = torch.cat([ctx_5d, video_5d], dim=2)
 
     T = video_5d.shape[2]
-    r = (1 - (T % 8)) % 8            # 需要补的帧数，使得 (T + r) % 8 == 1
+    r = (1 - (T % 8)) % 8            # number of frames to pad so that (T + r) % 8 == 1
     if r > 0:
         tail = video_5d[:, :, -1:, :, :].repeat(1, 1, r, 1, 1)
         video_5d = torch.cat([video_5d, tail], dim=2)
@@ -1324,7 +1325,7 @@ def get_rope_scale_factors(fps: float) -> list[float]:
 # ===========================
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig):
-    trainer = UnifiedTrainer(cfg,'/mnt/evad_fs/worldmodel/yongkangli/navsim-1.1/navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim.yaml')
+    trainer = UnifiedTrainer(cfg,'navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim_stage1.yaml')
     trainer.prepare_dataset()
     trainer.prepare_val_dataset()
     trainer.prepare_models()

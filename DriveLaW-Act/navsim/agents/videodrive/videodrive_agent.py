@@ -34,6 +34,7 @@ from diffusers.utils import export_to_video, load_video
 
 import os
 import uuid
+import time
 
 class VideoDriveAgent(AbstractAgent):
     def __init__(
@@ -41,13 +42,24 @@ class VideoDriveAgent(AbstractAgent):
         trajectory_sampling: TrajectorySampling,
         config_file,
         weight_dtype,
-        device
+        device,
+        view_mode: str = None,  # None: auto-detect; "front" for single view, "surround6" for multi-view
     ):
         super().__init__()
         self._trajectory_sampling = trajectory_sampling
         cd = load(open(config_file, "r"), Loader=Loader)
         args = argparse.Namespace(**cd)
         self.args = args
+        
+        # Auto-detect view_mode (priority: explicit arg > config_file > path-based inference).
+        if view_mode is None:
+            if hasattr(args, 'view_mode') and args.view_mode:
+                view_mode = args.view_mode
+            elif 'multi_view' in str(config_file).lower() or 'multiview' in str(config_file).lower():
+                view_mode = "surround6"
+            else:
+                view_mode = "front"
+        
         # Tokenizers
         self.tokenizer = None
 
@@ -68,6 +80,13 @@ class VideoDriveAgent(AbstractAgent):
 
         self.weight_dtype = torch.bfloat16
         self.device = "cuda" # device
+        
+        # 用于存储最近一次推理的时间分解
+        self.last_inference_timing = {}
+        
+        # 视图模式：单view ("front") 或多view ("surround6")
+        self.view_mode = view_mode
+        print(f"[VideoDriveAgent] Using view_mode: {view_mode} (detected from config_file: {config_file})")
 
 
     def name(self) -> str:
@@ -156,7 +175,7 @@ class VideoDriveAgent(AbstractAgent):
         self.vae_compression = self.pipe.vae_spatial_compression_ratio
 
     def round_to_vae_resolution(self, height, width):
-        """Adjust resolution to VAE acceptable values"""
+        """Adjust resolution to be compatible with the VAE compression ratio."""
         height = height - (height % self.vae_compression)
         width = width - (width % self.vae_compression)
         return height, width
@@ -165,11 +184,42 @@ class VideoDriveAgent(AbstractAgent):
         return SensorConfig.build_all_sensors(include=[0, 1, 2, 3,4,5,6,7,8,9,10,11])
 
     def get_target_builders(self) -> List[AbstractTargetBuilder]:
-        return [TrajectoryTargetBuilder(trajectory_sampling=self._trajectory_sampling)]
+        if self.view_mode == "front":
+            return [TrajectoryTargetBuilder(
+                trajectory_sampling=self._trajectory_sampling,
+                view_mode="front",
+            )]
+        else:
+            return [TrajectoryTargetBuilder(
+                trajectory_sampling=self._trajectory_sampling,
+                view_mode="surround6",
+                surround_keys=(
+                    "cam_b0",  # back
+                    "cam_l2",  # back-left
+                    "cam_l0",  # front-left
+                    "cam_f0",  # front
+                    "cam_r0",  # front-right
+                    "cam_r2",  # back-right
+                ),
+            )]
 
     def get_feature_builders(self) -> List[AbstractFeatureBuilder]:
-        return [VideoDriveFeatureBuilder(
-        )]
+        if self.view_mode == "front":
+            return [VideoDriveFeatureBuilder(
+                view_mode="front",
+            )]
+        else:
+            return [VideoDriveFeatureBuilder(
+                view_mode="surround6",
+                surround_keys=(
+                    "cam_b0",  # back
+                    "cam_l2",  # back-left
+                    "cam_l0",  # front-left
+                    "cam_f0",  # front
+                    "cam_r0",  # front-right
+                    "cam_r2",  # back-right
+                ),
+            )]
 
     def forward(self, features: Dict[str, torch.Tensor], targets=None) -> Dict[str, torch.Tensor]:
         if self.training:
@@ -182,12 +232,11 @@ class VideoDriveAgent(AbstractAgent):
 
     def _pad_to_8n1(self, x_5d: torch.Tensor) -> torch.Tensor:
         """
-        Args:
-            x_5d: (B*, C, T, H, W) sequential frames
-        Returns T' satisfying 8n+1; pads tail by repeating last frame.
+        x_5d: (B*, C, T, H, W) —— 顺序序列
+        返回 T' 满足 8n+1；尾部用最后一帧 repeat。
         """
         T = x_5d.shape[2]
-        need = (1 - (T % 8)) % 8  # Ensures (T + need) % 8 == 1
+        need = (1 - (T % 8)) % 8  # 使得 (T + need) % 8 == 1
         if need > 0:
             tail = x_5d[:, :, -1:, :, :].repeat(1, 1, need, 1, 1)
             x_5d = torch.cat([x_5d, tail], dim=2)
@@ -197,6 +246,9 @@ class VideoDriveAgent(AbstractAgent):
     def forward_test(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         device = self.device
         args = self.args
+        
+        # 重置时间记录
+        timing = {}
 
         if "images" not in features:
             raise ValueError("forward_test expects features['images'] = (T,C,H,W) conditioning frames.")
@@ -241,7 +293,7 @@ class VideoDriveAgent(AbstractAgent):
         # speed_desc     = "at low speed" if speed_mps < 5 else ("at moderate speed" if speed_mps < 15 else "at highway speed")
         # stability_desc = "steady motion" if acc_abs < 0.5 else "gradually changing speed"
 
-        # # Command -> motion semantics
+        # # 指令 -> 运动语义
         # driving_command = features["driving_command"]
         # if isinstance(driving_command, (list, tuple, np.ndarray, torch.Tensor)):
         #     arr = driving_command if torch.is_tensor(driving_command) else torch.tensor(driving_command)
@@ -257,7 +309,7 @@ class VideoDriveAgent(AbstractAgent):
         # elif "straight" in command_str:
         #     motion_trend, turning_desc = "driving straight ahead", "with stable lane keeping"
         # else:
-        #     motion_trend, turning_desc = "driving straight ahead", "with stable lane keeping"  # Fallback
+        #     motion_trend, turning_desc = "driving straight ahead", "with stable lane keeping"  # 兜底
 
 
 
@@ -279,13 +331,20 @@ class VideoDriveAgent(AbstractAgent):
             f"Maintain temporal consistency, stable camera perspective, natural motion flow without jitter or artifacts, "
             f"clear details, and realistic physics. "
         )
+        
+        # 测量图像预处理时间
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
         cond_pils: List[Image.Image] = self._tensor_video_to_pils(cond_tensor)
-        # Align resolution to VAE
+        torch.cuda.synchronize()
+        timing['image_preprocessing'] = time.perf_counter() - t0
+        
+        # 分辨率到 VAE 对齐
         # height = int(getattr(args, "height", H_in))
         # width  = int(getattr(args, "width",  W_in))
         # height, width = self.round_to_vae_resolution(height, width)
 
-        # Sampling steps/random seed
+        # 采样步数/随机种子
         num_frames = int(getattr(args, "num_frames", T_cond))
         num_steps  = int(getattr(args, "num_inference_step", 20))
         seed       = int(getattr(args, "seed", 42))
@@ -294,54 +353,75 @@ class VideoDriveAgent(AbstractAgent):
             "flickering, stuttering, camera shake, unstable footage, warping, trailing artifacts, "
             "temporal inconsistency, jerky motion, choppy framerate"
         )
-        # Action-related hyperparameters (default values, can also be specified in args)
-        action_chunk = int(getattr(args, "action_chunk",8))  # Number of prediction steps
-        action_dim   = int(getattr(args, "action_dim", 3))   # Dimension: e.g. (steer, throttle, brake)
+        # ✅ 仅动作相关的两个超参（给默认值，也可在 args 里指定）
+        action_chunk = int(getattr(args, "action_chunk",8))  # 预测步数
+        action_dim   = int(getattr(args, "action_dim", 3))                         # 维度：如(steer, throttle, brake)
+
+        # 根据view_mode设置输入尺寸
+        if self.view_mode == "surround6":
+            # 多view: 6个view横向拼接，每个448x256，总尺寸2688x256
+            height, width = 256, 3072
+        else:
+            # 单view: 1280x704
+            height, width = 704, 1280
+            # 如果config_file中指定了尺寸，优先使用
+            if hasattr(args, "height") and args.height:
+                height = int(args.height)
+            if hasattr(args, "width") and args.width:
+                width = int(args.width)
 
         condition = LTXVideoCondition(video=cond_pils, frame_index=0)
         generator = torch.Generator(device=device).manual_seed(seed)
 
-        # Core: only infer action, do not decode video
+        # ✅ 核心：只推理 action，不解码视频
+        # 测量 pipe.infer 的总时间（包括VAE编码、视频模型、diffusion planner等）
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
         out = self.pipe.infer(
             conditions=[condition],
             prompt=prompt,
             negative_prompt=negative_prompt,
             num_inference_steps=10,
             guidance_scale=1.0,
-            height=768,
-            width=1344,
+            height=height,
+            width=width,
             generator=generator,
             num_frames=18,
             output_type="latent", 
             return_action=True,
             return_video=False,
-            action_chunk=action_chunk,   # Align with GT
+            action_chunk=action_chunk,   # 与 GT 对齐
             action_dim=action_dim,
             context_dict=context_dict,
             noise_seed=42,
             pixel_wise_timestep=True,
             image_cond_noise_scale=0.0,
         )
+        torch.cuda.synchronize()
+        timing['pipe_infer'] = time.perf_counter() - t1
 
-        # Parse action output
+        # ✅ 解析动作输出
+        torch.cuda.synchronize()
+        t2 = time.perf_counter()
         preds = out.frames if hasattr(out, "frames") else out
         actions = preds["actions"] if isinstance(preds, dict) else preds[0]["action"]  # (B, action_chunk, action_dim)
         final_action_clip_value = 1.0
         if final_action_clip_value is not None:
             actions.clamp_(-final_action_clip_value, final_action_clip_value)
         actions = denorm_odo(actions)
-        # video = preds["videos"]
-        # video_name = f"scene_output_{uuid.uuid4().hex}.mp4"
-        # video_path = os.path.join('/mnt/evad_fs/worldmodel/yongkangli/navsim-1.1/video_output/', video_name)
-        # pil_frames_to_video(video[0], video_path, 2)
-        # exit(0)
-        # Usually batch=1
+
         actions = actions[0].detach().float().cpu()  # (action_chunk, action_dim)
+        torch.cuda.synchronize()
+        timing['action_postprocessing'] = time.perf_counter() - t2
+        
+        # 保存时间信息到类属性
+        self.last_inference_timing = timing
+        
         #print(actions)
-        # Optional: if you have historical action hidden state, pass features.get("history_action_state") to pipe's history_action_state
+        # 可选：如果你有历史动作隐藏态，可把 features.get("history_action_state") 传给 pipe 的 history_action_state
         result: Dict[str, object] = {
-            "actions": actions.numpy(),  # Convenient for downstream numpy usage
-            "actions_tensor": actions,   # Also keep tensor format
+            "actions": actions.numpy(),  # 方便下游用 numpy
+            "actions_tensor": actions,   # 同时保留 tensor
         }
         return result
 
@@ -352,20 +432,41 @@ class VideoDriveAgent(AbstractAgent):
         :return: Trajectory representing the predicted ego's position in future
         """
         self.eval()
+        
+        # 重置时间记录
+        timing = {}
+        
+        # 测量 feature building 时间
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
         features: Dict[str, torch.Tensor] = {}
         # build features
         for builder in self.get_feature_builders():
             features.update(builder.compute_features(agent_input))
         for builder in self.get_target_builders():
             data_dict = builder.compute_targets(scene)
+        torch.cuda.synchronize()
+        timing['feature_building'] = time.perf_counter() - t0
 
         # add batch dimension
         features = {k: v.unsqueeze(0) for k, v in features.items()}
 
         # forward pass
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
         with torch.no_grad():
             predictions = self.forward(features)
             poses = predictions["actions"]
+        torch.cuda.synchronize()
+        timing['forward_pass'] = time.perf_counter() - t1
+        
+        # 合并 forward_test 中的时间信息
+        if hasattr(self, 'last_inference_timing'):
+            timing.update(self.last_inference_timing)
+        
+        # 保存总时间信息
+        self.last_inference_timing = timing
+        
         # print_pred_gt_together(poses, data_dict["trajectory"])
         # exit(0)
         # extract trajectory
@@ -433,11 +534,10 @@ class VideoDriveAgent(AbstractAgent):
     @staticmethod
     def _compute_rel_from_T44(T: torch.Tensor):
             """
-            Args:
-                T: (T,4,4) absolute pose (ego->global)
-            Returns:
-                poses: (T,2) relative translation [dx, dy] per step, frame 0 is 0
-                yaws: (T,) relative yaw d_yaw per step, frame 0 is 0
+            T : (T,4,4)  绝对位姿(ego->global)
+            返回:
+            poses: (T,2)  每步相对平移 [dx, dy]，第0帧为0
+            yaws : (T,)   每步相对偏航 d_yaw，   第0帧为0
             """
             if not torch.is_tensor(T):
                 T = torch.from_numpy(T)
@@ -450,9 +550,9 @@ class VideoDriveAgent(AbstractAgent):
             for i in range(1, n):
                 T_prev_inv = torch.linalg.inv(T[i-1])
                 T_rel = T_prev_inv @ T[i]          # (4,4)
-                # Relative translation (only x, y)
+                # 相对平移（只取 x,y）
                 poses[i] = T_rel[:2, 3]
-                # Relative yaw (around z-axis)
+                # 相对偏航（绕z）
                 R = T_rel[:3, :3]
                 yaws[i] = torch.atan2(R[1, 0], R[0, 0])
             return poses, yaws
@@ -460,9 +560,8 @@ class VideoDriveAgent(AbstractAgent):
     @staticmethod
     def _tensor_video_to_pils(video: torch.Tensor):
         """
-        Args:
-            video: (T,C,H,W) in [-1,1] or [0,1]
-        Returns: List[PIL.Image]
+        video: (T,C,H,W) in [-1,1] 或 [0,1]
+        return: List[PIL.Image]
         """
         x = video.detach().cpu()
         if x.min() < 0:
@@ -476,7 +575,7 @@ class VideoDriveAgent(AbstractAgent):
         return pils
 
 def pil_frames_to_video(pil_frames, output_path, fps):
-    """Save a list of PIL images as MP4 video"""
+    """将 PIL 图像列表保存为 MP4 视频"""
     try:
         export_to_video(pil_frames, output_path, fps=fps)
         return True
@@ -506,7 +605,7 @@ def print_pred_gt_together(poses, gt, precision=3, max_rows=None):
     p = _to_np(poses)
     g = _to_np(gt)
 
-    # Unify shape: [T, D]
+    # 统一形状：[T, D]
     if p.ndim == 1: p = p[:, None]
     if g.ndim == 1: g = g[:, None]
 

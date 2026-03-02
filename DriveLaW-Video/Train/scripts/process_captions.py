@@ -219,6 +219,7 @@ def compute_captions_embeddings(
     batch_size: int = 8,
     device: str = "cuda",
     load_text_encoder_in_8bit: bool = False,
+    model_source: str | Path | None = None,
 ) -> None:
     """
     Process captions and save text embeddings.
@@ -233,6 +234,7 @@ def compute_captions_embeddings(
         batch_size: Batch size for processing
         device: Device to use for computation
         load_text_encoder_in_8bit: Whether to load text encoder in 8-bit
+        model_source: Optional model source (HF repo or local path). If None, uses default HF repo.
     """
     from rich.console import Console
     from rich.progress import (
@@ -263,8 +265,11 @@ def compute_captions_embeddings(
 
     # Load models
     with console.status("[bold]Loading text encoder...", spinner="dots"):
-        tokenizer = load_tokenizer()
-        text_encoder = load_text_encoder(load_in_8bit=load_text_encoder_in_8bit).to(device)
+        tokenizer = load_tokenizer(model_source=model_source)
+        text_encoder = load_text_encoder(
+            model_source=model_source,
+            load_in_8bit=load_text_encoder_in_8bit,
+        ).to(device)
 
     # Create dataloader
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2)

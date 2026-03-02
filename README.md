@@ -1,289 +1,80 @@
-# DriveLaW: Unifying Planning and Video Generation in a Latent Driving World
 
-DriveLaW is a comprehensive framework for autonomous driving that combines video generation and trajectory planning using latent diffusion models. The project consists of two main components:
 
-- **DriveLaW-Video**: Video generation module based on Video diffusion models
-- **DriveLaW-Act**: Action planning module that integrates video generation with trajectory planning
+<div align="center">
+<h3>DriveLaW: Unifying Planning and Video Generation in a Latent Driving World</h3>
+<h3>CVPR 2026</h3>
+Tianze Xia<sup>1,2\*</sup>, Yongkang Li<sup>1,2\*</sup>, Lijun Zhou<sup>2\*</sup>, Jingfeng Yao<sup>1</sup>, Kaixin Xiong<sup>2</sup>, Haiyang Sun<sup>2†</sup>,  Bing Wang<sup>2</sup>,<br>Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<sup>1</sup>, Xinggang Wang<sup>1,✉</sup>
 
-## Table of Contents
 
-- [Overview](#overview)
-- [Installation](#installation)
-- [Project Structure](#project-structure)
-- [Quick Start](#quick-start)
-  - [Video Generation (Inference)](#video-generation-inference)
-  - [Video Generation (Training)](#video-generation-training)
-  - [Planning Module (Training)](#planning-module-training)
-  - [Planning Module (Evaluation)](#planning-module-evaluation)
-- [Configuration](#configuration)
-- [Environment Variables](#environment-variables)
-- [Troubleshooting](#troubleshooting)
-- [Citation](#citation)
+
+<sup>1</sup>  Huazhong University of Science and Technology
+<sup>2</sup>  Xiaomi EV 
+
+(\*) Equal contribution. (†) Project leader. (✉)Corresponding Author.
+
+<a href="https://arxiv.org/abs/2512.23421"><img src='https://img.shields.io/badge/arXiv-DriveLaW-red' alt='Paper PDF'></a>
+<a href="https://wm-research.github.io/DriveLaW/"><img src='https://img.shields.io/badge/Project_Page-DriveLaW-green' alt='Project Page'></a>
+</div>
+
+## News
+`[2026/3/17]` Weights of DriveLaW-Video and DriveLaW-Act have been released.🚀
+`[2026/3/16]` Codes of DriveLaW has been released.🚀
+`[2026/2/21]` Our paper has been accepted at CVPR 2026. 🎉
+`[2025/12/30]` [ArXiv](https://arxiv.org/abs/2512.23421) paper release. Models/Code are coming soon. Please stay tuned! ☕️
+
+## Updates
+- [x] Release Paper   
+- [x] Release inference & training codes  
+- [x] Release model weights 
+
+<!-- ## Introduction -->
+## Abstract
+World models have become crucial for autonomous driving, as they learn how scenarios evolve over time to address the long-tail challenges of the real world. However, current approaches relegate world models to limited roles: they operate within ostensibly unified architectures that still keep world prediction and motion planning as decoupled processes. To bridge this gap, we propose DriveLaW, a novel paradigm that unifies video generation and motion planning. By directly injecting the latent representation from its video generator into the planner, DriveLaW ensures inherent consistency between high-fidelity future generation and reliable trajectory planning. Specifically, DriveLaW consists of two core components: DriveLaW-Video, our powerful world model that generates high-fidelity forecasting with expressive latent representations, and DriveLaW-Act, a diffusion planner that generates consistent and reliable trajectories from the latent of DriveLaW-Video, with both components optimized by a three-stage progressive training strategy. The power of our unified paradigm is demonstrated by new state-of-the-art results across both tasks. DriveLaW not only advances video prediction significantly, surpassing best-performing work by 33.3% in FID and 1.8% in FVD, but also achieves a new record on the NAVSIM planning benchmark.
 
 ## Overview
+<div align="center">
+<img src="assets/images/drivelaw-fig2.png" width="1000">
+</div>
 
-DriveLaW integrates:
-1. **Video Generation**: Uses LTX-Video based diffusion models to generate future driving scenarios
-2. **Trajectory Planning**: Combines video generation with action prediction for autonomous driving planning
 
-## Installation
 
-### Prerequisites
 
-- Python >= 3.10
-- CUDA-compatible GPU (recommended)
-- PyTorch >= 2.1.0
-- Linux (recommended)
 
-### Step 1: Clone the Repository
+## Getting Started
 
-```bash
-git clone <repository-url>
-cd DriveLaW
-```
+The codebase is organized into two main components:
 
-### Step 2: Install Dependencies
+- **DriveLaW-Video**: Video world model 
+- **DriveLaW-Act**: Diffusion-based planner that consumes video latents from DriveLaW-Video
 
-Install the package with all dependencies:
+Basci installation for DriveLaW :
 
 ```bash
 pip install -e .
-```
-
-
-### Step 3: Install Additional Dependencies (if needed)
-
-Some dependencies may require additional setup:
-
-- **NUPlan Devkit**: Installed automatically via `setup.py`, but you may need to configure NuPlan dataset paths
-- **FFmpeg**: Required for video processing. Install via:
-  ```bash
-  sudo apt-get install ffmpeg  # Ubuntu/Debian
-  ```
-
-## Project Structure
-
-```
-DriveLaW/
-├── DriveLaW-Video/          # Video generation module
-│   ├── Infer/               # Inference scripts
-│   │   ├── infer.py         # Main inference script
-│   │   ├── infer.sh         # Inference shell script
-│   │   └── diffusers/       # Modified diffusers library
-│   └── Train/               # Training scripts
-│       ├── scripts/         # Training utilities
-│       ├── configs/         # Training configurations
-│       └── src/ltxv_trainer/ # Training framework
-├── DriveLaW-Act/            # Planning module
-│   ├── navsim/              # NavSim integration
-│   │   ├── agents/          # Agent implementations
-│   │   ├── planning/        # Planning scripts
-│   │   └── ...
-│   ├── train_planner.sh     # Training script
-│   ├── evaluate_planner.sh  # Evaluation script
-│   └── run_caching_drivelaw.sh # Data caching script
-├── setup.py                 # Package setup
-└── README.md               # This file
-```
-
-## Quick Start
-
-### Video Generation (Inference)
-
-Generate driving videos from conditioning frames and text prompts.
-
-#### Basic Usage
-
-```bash
-cd DriveLaW-Video/Infer
-python infer.py \
-  --condition_video demo/condition_videos/scene_0001_conditioning.mp4 \
-  --prompt demo/prompts/scene_0001_prompt.txt \
-  --output_path ./demo/results/output_0000.mp4 \
-  --model_path ./models/LTX-Video-0.9.5-finetune-final \
-  --height 704 \
-  --width 1280 \
-  --num_frames 33 \
-  --condition_frames 9 \
-  --frame_rate 8 \
-  --seed 42 \
-  --num_inference_steps 30 \
-  --device cuda
-```
-
-#### Using Shell Script
-
-Edit `DriveLaW-Video/Infer/infer.sh` to set paths, then run:
-
-```bash
-cd DriveLaW-Video/Infer
-bash infer.sh
-```
-
-**Key Parameters:**
-- `--condition_video`: Input conditioning video file
-- `--prompt`: Text prompt (file path or string)
-- `--model_path`: Path to model checkpoint or HuggingFace model ID
-- `--num_frames`: Total frames to generate
-- `--condition_frames`: Number of conditioning frames to remove from output
-
-### Video Generation (Training)
-
-Train Video models on custom driving datasets. **Note: You must preprocess your dataset before training.**
-
-#### Step 0: Install the package for video training 
-
-
-```bash
-cd DriveLaW-Video/Train
+git clone https://github.com/motional/nuplan-devkit.git
+cd nuplan-devkit
 pip install -e .
 ```
 
-#### Step 1: Prepare Dataset
+For a **video-only** world model :
 
-Organize your dataset following the structure. The dataset must be in JSON, JSONL, or CSV format with caption and video path columns:
+- [DriveLaW-Video/Infer/README.md](DriveLaW-Video/Infer/README.md)
+- [DriveLaW-Video/Train/README.md](DriveLaW-Video/Train/README.md)
 
-**JSON format example:**
-```json
-[
-  {
-    "caption": "A high-quality dashboard camera view of autonomous driving",
-    "media_path": "videos/scene_0001.mp4"
-  },
-  {
-    "caption": "Driving on a highway with smooth lane keeping",
-    "media_path": "videos/scene_0002.mp4"
-  }
-]
-```
+For **planning / NavSim** evaluation :
 
-**CSV format example:**
-```csv
-caption,media_path
-"A high-quality dashboard camera view","videos/scene_0001.mp4"
-"Driving on a highway","videos/scene_0002.mp4"
-```
-
-#### Step 2: (Optional) Split Long Videos into Scenes
-
-If you have long-form videos, split them into shorter scenes:
-
-```bash
-python scripts/split_scenes.py input.mp4 scenes_output_dir/ \
-    --filter-shorter-than 5s
-```
-
-#### Step 3: (Optional) Generate Captions
-
-If your dataset doesn't include captions, generate them automatically:
-
-```bash
-cd DriveLaW-Video/Train
-python scripts/caption_videos.py scenes_output_dir/ \
-    --output scenes_output_dir/dataset.json
-```
-
-#### Step 4: Preprocess Dataset (REQUIRED)
-
-**This step is mandatory before training.** Preprocessing computes and caches video latents and text embeddings, significantly accelerating training:
-
-```bash
-cd DriveLaW-Video/Train
-python scripts/preprocess_dataset.py dataset.json \
-    --resolution-buckets "768x768x25" \
-    --caption-column "caption" \
-    --video-column "media_path" \
-    --model-source "./models/LTX-Video-0.9.5"
-```
-
-**Important Notes on Resolution Buckets:**
-- Spatial dimensions (width × height) must be multiples of 32
-- Number of frames must be a multiple of 8 plus 1 (e.g., 25, 33, 41, 49, 89)
-- Example: `"768x768x25"`, `"1024x576x65"`, `"768x448x89"`
-
-The preprocessed data will be saved in `.precomputed/` directory with:
-- `latents/`: Cached video latents
-- `conditions/`: Cached text embeddings
-
-#### Step 5: Configure Training
-
-Edit `DriveLaW-Video/Train/configs/drivelaw_video.yaml`:
-
-```yaml
-model:
-  model_source: "./models/LTX-Video-0.9.5"
-  training_mode: "full" 
-
-data:
-  preprocessed_data_root: "./data/.precomputed"  # Path to .precomputed directory
-
-# ... other configurations
-```
-
-#### Step 6: Run Training
-
-```bash
-cd DriveLaW-Video/Train
-python scripts/train.py configs/drivelaw_video.yaml
-```
-
-Or use the shell script:
-
-```bash
-cd DriveLaW-Video/Train
-bash train.sh
-```
-
-### Planning Module (Training)
-
-Train the planning agent with video generation capabilities.
-
-#### Step 1: Download NAVSIM datasets
-- [Download NAVSIM datasets following official instruction](https://github.com/autonomousvision/navsim/blob/main/docs/install.md)
+- [DriveLaW-Act/README.md](DriveLaW-Act/README.md)
 
 
-#### Step 2: Prepare Dataset Cache
 
-Cache the dataset for faster training:
+## Acknowledgments
 
-```bash
-cd DriveLaW-Act
-bash run_caching_drivelaw.sh
-```
-
-Edit `run_caching_drivelaw.sh` to set:
-- `CACHE_PATH`: Path to cache directory
-- `NAVSIM_*` environment variables
-
-#### Step 3: Train Planning Agent
-
-```bash
-cd DriveLaW-Act
-bash train_planner.sh
-```
-
-Edit `train_planner.sh` to configure:
-- `GPUS`: Number of GPUs
-- `cache_path`: Path to cached dataset
-- Training split and other parameters
-
-### Planning Module (Evaluation)
-
-Evaluate the trained planning agent on test scenarios.
-
-```bash
-cd DriveLaW-Act
-bash evaluate_planner.sh
-```
-
-Edit `evaluate_planner.sh` to set:
-- `CHECKPOINT`: Path to trained model checkpoint
-- Evaluation split (`TRAIN_TEST_SPLIT=navtest`)
-
+- Built on [LTX-Video](https://github.com/Lightricks/LTX-Video)
+- Built on [ReCogDrive](https://github.com/xiaomi-research/recogdrive/tree/main)
+- Uses [Diffusers](https://github.com/huggingface/diffusers) library
 
 ## Citation
-
-If you use DriveLaW in your research, please cite:
+If you find DriveLaW is useful in your research or applications, please consider giving us a star 🌟 and citing it by the following BibTeX entry.
 
 ```bibtex
 @article{xia2025drivelaw,
@@ -293,10 +84,3 @@ If you use DriveLaW in your research, please cite:
   year={2025}
 }
 ```
-
-## Acknowledgments
-
-- Built on [LTX-Video](https://github.com/Lightricks/LTX-Video)
-- Built on [recogdrive](https://github.com/xiaomi-research/recogdrive/tree/main)
-- Uses [Diffusers](https://github.com/huggingface/diffusers) library
-

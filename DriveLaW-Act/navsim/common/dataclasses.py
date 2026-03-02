@@ -28,31 +28,32 @@ OPENSCENE_DATA_ROOT = os.environ.get("OPENSCENE_DATA_ROOT")
 NUPLAN_MAPS_ROOT = os.environ.get("NUPLAN_MAPS_ROOT")
 
 
-OLD_ROOT = "/mnt/evad_fs/worldmodel/yongkangli/NAVSIM/dataset/sensor_blobs/trainval"
-NEW_ROOT = "/mnt/evad_fs/opensource-data/nuplan/nuplan_sensor_train"
-VAL_ROOT = "/mnt/evad_fs/worldmodel/tianzexia/nuplan/nuplan_sensor_val"
+OLD_ROOT = "path/toNAVSIM/dataset/sensor_blobs/trainval"
+NEW_ROOT = "path/to/nuplan/nuplan_sensor_train"
+VAL_ROOT = "path/to/nuplan/nuplan_sensor_val"
 
 def _rebase(p: Path, src_root: str, dst_root: str) -> Path:
     s = str(p)
     if s.startswith(src_root):
         return Path(dst_root) / Path(s).relative_to(src_root)
-    # 兜底：不以 src_root 开头时尝试一次替换
+    # Fallback: if not starting with src_root, try a simple replace.
     return Path(s.replace(src_root, dst_root))
 
 def _reroot_path(p: Path) -> Path:
     """
-    返回优先候选（可能不存在）：先映射到 NEW_ROOT，不存在再映射到 VAL_ROOT。
-    仅给 _resolve_path 调用；不做 exists 校验。
+    Return preferred candidate (which may not exist): first map to NEW_ROOT,
+    then to VAL_ROOT if NEW_ROOT does not exist.
+    Only used by _resolve_path; does not perform existence checks here.
     """
     cand1 = _rebase(p, OLD_ROOT, NEW_ROOT)
     if cand1.exists():
         return cand1
-    # 第二候选
+    # Second candidate.
     cand2 = _rebase(p, OLD_ROOT, VAL_ROOT)
     return cand2
 
 def _resolve_path(p: Path) -> Path:
-    """优先用 p，若不存在依次尝试 NEW_ROOT、VAL_ROOT；都不存在则抛 FileNotFoundError。"""
+    """Prefer p; if it does not exist, try NEW_ROOT and VAL_ROOT; otherwise raise FileNotFoundError."""
     if p.exists():
         return p
     cand1 = _rebase(p, OLD_ROOT, NEW_ROOT)

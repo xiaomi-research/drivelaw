@@ -187,97 +187,12 @@ The preprocessed data is saved in a `.precomputed` directory:
 dataset/
 └── .precomputed/
     ├── latents/           # Cached video latents
-    ├── conditions/        # Cached text embeddings
-    └── reference_latents/ # (only for IC-LoRA training) Cached reference video latents
+    └── conditions/        # Cached text embeddings
 ```
 
-## 🔄 IC-LoRA Reference Video Preprocessing
-
-For IC-LoRA training, you can preprocess datasets that include reference videos.
-Reference videos provide clean conditioning input while target videos represent the desired transformed output.
-
-### Dataset Format with Reference Videos
-
-**JSON format:**
-```json
-[
-  {
-    "caption": "A cat playing with a ball of yarn",
-    "media_path": "videos/cat_playing.mp4",
-    "reference_path": "references/cat_playing.mp4"
-  }
-]
-```
-
-**JSONL format:**
-```jsonl
-{"caption": "A cat playing with a ball of yarn", "media_path": "videos/cat_playing.mp4", "reference_path": "references/cat_playing.mp4"}
-{"caption": "A dog running in the park", "media_path": "videos/dog_running.mp4", "reference_path": "references/dog_running.mp4"}
-```
-
-**CSV format:**
-```csv
-caption,media_path,reference_path
-"A cat playing with a ball of yarn","videos/cat_playing.mp4","references/cat_playing.mp4"
-```
-
-### Preprocessing with Reference Videos
-
-```bash
-# Using JSON dataset
-python scripts/preprocess_dataset.py dataset.json \
-    --resolution-buckets "768x768x25" \
-    --caption-column "caption" \
-    --video-column "media_path" \
-    --reference-column "reference_path"
-
-# Using CSV dataset
-python scripts/preprocess_dataset.py dataset.json \
-    --resolution-buckets "768x768x25" \
-    --caption-column "caption" \
-    --video-column "media_path" \
-    --reference-column "reference_path"
-```
-
-This will create an additional `reference_latents/` directory containing the preprocessed reference video latents.
-
-### Example Dataset
-
-For reference, see our **[🎯 Canny Control Dataset](https://huggingface.co/datasets/Lightricks/Canny-Control-Dataset)** which demonstrates proper IC-LoRA dataset structure with paired videos and Canny edge maps.
-
-### Generating Reference Videos
-
-**Dataset Requirements for IC-LoRA:**
-- Your dataset must contain paired videos where each target video has a corresponding reference video
-- Reference and target videos must have *identical* resolution and length
-- Both reference and target videos should be preprocessed together using the same resolution buckets
-
-We provide an example script, [`scripts/compute_condition.py`](../scripts/compute_condition.py), to generate Canny reference videos for a given dataset, similar to the approach used in our example dataset.
-This script accepts a JSON file as the dataset configuration (such as the output from `caption_videos.py`) and updates it in-place by adding the filenames of the generated reference videos.
-
-```bash
-python scripts/compute_condition.py scenes_output_dir/ \
-    --output scenes_output_dir/dataset.json
-```
-
-If you want to generate a different type of condition, just modify or replace the `compute_condition()` function within this script.
-
-## 🎯 LoRA Trigger Words
-
-When training a LoRA, you can specify a trigger token that will be prepended to all captions:
-
-```bash
-python scripts/preprocess_dataset.py /path/to/dataset \
-    --resolution-buckets "1024x576x65" \
-    --id-token "TOKEN"
-```
-
-This acts as a trigger word that activates the LoRA during inference when you include the same token in your prompts.
-
-> **Note:**
-> There is no need to manually insert the trigger word (id-token) into your dataset JSON/JSONL/CSV file.
-> The trigger token specified with `--id-token` is automatically prepended to each caption during preprocessing.
-
+> **Note:** IC-LoRA / LoRA-specific preprocessing (reference videos, trigger
+> tokens, etc.) is **not required** for reproducing the DriveLaW results and
+> is intentionally omitted here for simplicity.
 
 ## 🔍 Decoding Videos for Verification
 

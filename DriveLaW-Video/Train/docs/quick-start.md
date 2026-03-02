@@ -1,53 +1,88 @@
-# Quick Start Guide
+# DriveLaW-Video Training: Quick Start
 
-Get up and running with LTX-Video training in just a few steps!
+This guide gives you a minimal, DriveLaW-focused path to train the video world model.
 
-## ⚡ Installation
+The full documentation with more details can be found in:
 
-First, install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you haven't already.
-Then clone the repository and install the dependencies:
+- `dataset-preparation.md`
+- `Data-preparation.md`
+- `configuration-reference.md`
+- `training-guide.md`
 
-```bash
-git clone https://github.com/Lightricks/LTX-Video-Trainer
-cd LTX-Video-Trainer
-uv sync
-source .venv/bin/activate
-```
+---
 
-## 💻 Command Line Training
+## 1. Install the training module
 
-For step-by-step command-line training:
-
-1. **Prepare your dataset** - See [Dataset Preparation](dataset-preparation.md) for splitting videos, generating captions, and preprocessing
-2. **Configure training** - Check [Configuration Reference](configuration-reference.md) for setting up your training parameters
-3. **Start training** - Follow the [Training Guide](training-guide.md) to run your training job
-
-## 🎨 Web Interface (Gradio)
-
-For users who prefer a graphical interface, you can use our Gradio web UI.
-Note that while more user-friendly, it's less flexible configuration-wise than the CLI approach:
+From the root of the DriveLaW repository:
 
 ```bash
-# Install dependencies if you haven't already
-uv sync
-source .venv/bin/activate
-
-cd scripts
-# Launch the Gradio interface
-python app_gradio.py
+pip install -e .
 ```
 
-This will open a web interface at `http://localhost:7860` that provides all training functionality in a user-friendly way.
-The interface provides the same functionality as the command-line tools but in a more intuitive way.
+Or, if you only want the video training code:
 
-## Next Steps
+```bash
+cd DriveLaW-Video/Train
+pip install -e .
+```
 
-Once you've completed your first training run, you can:
+This installs all required Python dependencies (PyTorch, diffusers, accelerate, etc.).
 
-- Learn more about [Dataset Preparation](dataset-preparation.md) for advanced preprocessing
-- Explore different [Training Modes](training-modes.md) (LoRA, Full fine-tuning, IC-LoRA)
-- Dive deeper into [Training Configuration](configuration-reference.md)
+---
 
-## Need Help?
+## 2. Prepare your data
 
-If you run into issues at any step, see the [Troubleshooting Guide](troubleshooting.md) for solutions to common problems.
+There are two parts to data preparation:
+
+1. **Download and organize driving datasets** (e.g. NuPlan, nuScenes, your own logs)
+   - See `Data-preparation.md` for how to download and structure the datasets
+     used in the DriveLaW paper.
+
+2. **Build the training metadata and precompute latents**
+   - See `dataset-preparation.md` for:
+     - splitting long videos into shorter scenes (optional)
+     - generating captions (optional)
+     - running `scripts/preprocess_dataset.py` to compute video latents and
+       text embeddings into a `.precomputed/` directory.
+
+At the end of this step you should have:
+
+- a metadata file (CSV / JSON / JSONL) with `caption` and `media_path` columns, and
+- a `.precomputed/` directory with `latents/` and `conditions/`.
+
+---
+
+## 3. Configure training
+
+Use `configs/drivelaw_video.yaml` as a starting point and edit:
+
+- `model.model_source`: base LTX-Video checkpoint (HF ID or local path),
+- `data.preprocessed_data_root`: path to your preprocessed dataset,
+- `output_dir`: where to save logs and checkpoints,
+- `model.training_mode: "full"` for full fine-tuning (the mode used in DriveLaW).
+
+See `configuration-reference.md` for a complete description of the available options.
+
+---
+
+## 4. Launch training
+
+Basic single-node training:
+
+```bash
+cd DriveLaW-Video/Train
+python scripts/train.py configs/drivelaw_video.yaml
+```
+
+For larger jobs or multiple GPUs, see `training-guide.md` for examples using
+the distributed training script.
+
+---
+
+## 5. Troubleshooting
+
+If you encounter issues (out-of-memory, dataset errors, etc.), consult:
+
+- `troubleshooting.md`
+
+for common problems and suggested fixes.

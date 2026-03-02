@@ -107,7 +107,7 @@ def load_scheduler() -> FlowMatchEulerDiscreteScheduler:
         Loaded scheduler
     """
     return FlowMatchEulerDiscreteScheduler.from_pretrained(
-        "/mnt/evad_fs/worldmodel/tianzexia/LTX-Video-0.9.5-finetune", # Use the latest scheduler config from LTXV_13B_097_DEV.
+        "", # Use the latest scheduler config from LTXV_13B_097_DEV.
         subfolder="scheduler",
     )
 
@@ -120,7 +120,7 @@ def load_tokenizer() -> T5Tokenizer:
         Loaded tokenizer
     """
     return T5Tokenizer.from_pretrained(
-        "/mnt/evad_fs/worldmodel/tianzexia/LTX-Video-0.9.5-finetune",
+        "",
         subfolder="tokenizer",
     )
 
@@ -140,7 +140,7 @@ def load_text_encoder(*, load_in_8bit: bool = False) -> T5EncoderModel:
         if load_in_8bit
         else {"torch_dtype": torch.bfloat16}
     )
-    return T5EncoderModel.from_pretrained("/mnt/evad_fs/worldmodel/tianzexia/LTX-Video-0.9.5-finetune", subfolder="text_encoder", **kwargs)
+    return T5EncoderModel.from_pretrained("", subfolder="text_encoder", **kwargs)
 
 
 def load_vae(

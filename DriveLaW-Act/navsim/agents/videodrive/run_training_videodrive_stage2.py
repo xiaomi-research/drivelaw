@@ -6,7 +6,10 @@ from typing import Dict, Tuple, List, Any, Union
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch.nn.functional as F
-
+import lzma
+import pickle
+import os, lzma, pickle
+from collections import OrderedDict
 # ---------------- Core deps ----------------
 import hydra
 import argparse
@@ -20,6 +23,8 @@ from einops import rearrange
 from PIL import Image
 from tqdm.auto import tqdm
 from torch import Tensor
+from dataclasses import asdict, dataclass, field
+from concurrent.futures import ProcessPoolExecutor
 
 # ---------------- Logging/accel ----------------
 from accelerate import Accelerator, DistributedType
@@ -31,6 +36,9 @@ from accelerate.utils import (
     ProjectConfiguration,
     set_seed,
 )
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 
 # ---------------- Diffusers/Transformers ----------------
 import transformers
@@ -43,7 +51,6 @@ from diffusers.training_utils import (
     compute_loss_weighting_for_sd3,
 )
 from diffusers import AutoencoderKLLTXVideo
-from diffusers.training_utils import EMAModel
 
 # ---------------- Your utils (keep as-is) ----------------
 from utils import init_logging, import_custom_class, save_video
@@ -69,18 +76,25 @@ from navsim.agents.abstract_agent import AbstractAgent
 from navsim.common.dataclasses import SceneFilter
 from navsim.common.dataloader import SceneLoader
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
+from navsim.agents.videodrive.video_models.diffusion_planner.diffusion_planner import preprocessing_action_states, add_action_expert, ActionTrajectoryScorer
+
+from navsim.common.dataclasses import Trajectory
+from navsim.common.dataloader import MetricCacheLoader
+from navsim.evaluate.pdm_score import pdm_score
+from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import (
+    PDMScorer,
+    PDMScorerConfig,
+)
+from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator import (
+    PDMSimulator,
+)
+from nuplan.planning.simulation.trajectory.trajectory_sampling import (
+    TrajectorySampling,
+)
 
 # ---------------- Config constants ----------------
-script_path = os.path.abspath(__file__)
-script_dir = os.path.dirname(script_path)
-CONFIG_PATH = os.path.join(
-    script_dir,  
-    "../../",    
-    "planning",
-    "script",
-    "config",
-    "training"
-)
+# 动态推断 config 目录：从当前文件定位到 navsim 根，再拼接 planning/script/config/training
+CONFIG_PATH = "navsim/planning/script/config/training"
 CONFIG_NAME = "default_training"
 
 logger = get_logger("unified_trainer")
@@ -89,9 +103,54 @@ logger.setLevel(LOG_LEVEL)
 
 
 # ===========================
-# Prompt builder (as per your rules)
+# Prompt builder (按你规则)
 # ===========================
 NAV_CMDS = ['turn left', 'go straight', 'turn right']
+
+
+_GLOBALS = {"CACHE_LRU": None, "LRU_CAP": 0, "SIM": None, "SCORER": None}
+
+def _lru_get(token: str, cache_path: str):
+    lru = _GLOBALS["CACHE_LRU"]
+    obj = lru.get(token)
+    if obj is None:
+        with lzma.open(cache_path, 'rb') as f:
+            obj = pickle.load(f)
+        lru[token] = obj
+        if len(lru) > _GLOBALS["LRU_CAP"]:
+            lru.popitem(last=False)
+    else:
+        lru.move_to_end(token)
+    return obj
+
+def worker_init(sim_cls, sim_kwargs, scorer_cls, scorer_kwargs, lru_cap, numa_cpus):
+    if numa_cpus:
+        try: os.sched_setaffinity(0, numa_cpus)
+        except: pass
+    os.environ.setdefault("OMP_NUM_THREADS","1")
+    os.environ.setdefault("MKL_NUM_THREADS","1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS","1")
+
+    _GLOBALS["SIM"]    = sim_cls(**sim_kwargs)
+    _GLOBALS["SCORER"] = scorer_cls(**scorer_kwargs)
+    _GLOBALS["CACHE_LRU"] = OrderedDict()
+    _GLOBALS["LRU_CAP"]   = int(lru_cap)
+
+
+def score_token_batch(args):
+    token, cache_path, trajs_np = args  # trajs_np: (M, L, C)
+    cache = _lru_get(token, cache_path)
+    sim   = _GLOBALS["SIM"]
+    scr   = _GLOBALS["SCORER"]
+    out = []
+    for t in trajs_np:
+        res = pdm_score(metric_cache=cache,
+                        model_trajectory=Trajectory(t),
+                        future_sampling=sim.proposal_sampling,
+                        simulator=sim,
+                        scorer=scr)
+        out.append(float(res.score))
+    return token, out
 
 def _round_up_to(x: int, m: int) -> int:
     return (x + m - 1) // m * m
@@ -112,10 +171,10 @@ def _resize_to_multiple(img: torch.Tensor, multiple: int = 32) -> torch.Tensor:
 
 def _resize_to_hw(img: torch.Tensor, height: int = 704, width: int = 1280) -> torch.Tensor:
     """
-    Supports:
-      - (C,H,W)
-      - (T,C,H,W) where T is treated as batch dimension
-    Resizes to fixed (height, width); returns directly if already at this size.
+    Supported shapes:
+      - (C, H, W)
+      - (T, C, H, W) where T is treated as a batch dimension.
+    Always resizes to (height, width); returns input directly if it already has this size.
     """
     if img.dim() == 3:  # (C,H,W)
         _, H, W = img.shape
@@ -148,9 +207,9 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
                        speed_mps: float,
                        acc_mps2: float) -> str:
     """
-    Args:
-        hist_xyh: (T_hist, 3) Last frame ~ (0,0,0), first frame is earliest history
-        Uses absolute values from first frame for total_* / yaw
+    hist_xyh: (T_hist, 3), with the last frame approximately (0, 0, 0) and the first
+        frame being the earliest history.
+    total_* / yaw use the absolute value of the first frame.
     """
     h = hist_xyh.detach().cpu()
     x0, y0, th0 = h[0].tolist()
@@ -159,7 +218,6 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
     total_lateral  = abs(float(y0))
     net_yaw_change = abs(float(th0))  # rad
 
-    # Speed classification
     if speed_mps < 5.0:
         speed_desc = "at low speed"
     elif speed_mps < 15.0:
@@ -167,10 +225,8 @@ def build_prompt_fixed(hist_xyh: torch.Tensor,
     else:
         speed_desc = "at highway speed"
 
-    # Stability (acceleration)
     stability_desc = "steady motion" if acc_mps2 < 0.5 else "gradually changing speed"
 
-    # Command -> text description
     cmd = one_hot_to_cmd(high_cmd_one_hot).lower()
     if "left" in cmd:
         motion_trend, turning_desc = "turning left", "with controlled steering"
@@ -203,12 +259,12 @@ def _to_chw_float_tensor(img_rgb_uint8: np.ndarray, normalize="[-1,1]") -> torch
 
 class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
     """
-    Allows two forms to coexist in cache:
-      1) features["images"] is already (T,C,H,W) Tensor -- returned directly
-      2) features["image_paths"] is List[str|Path] -- lazily loaded as Tensor in __getitem__
-    Similarly for targets:
-      - targets["future_frames"] is directly (Tf,C,H,W)
-      - Or targets["future_paths"] is List[str|Path], lazily loaded
+    Cache-only dataset with lazy image loading.
+      1) features["images"]: already a (T, C, H, W) tensor — returned as is.
+      2) features["image_paths"]: List[str | Path] — lazily loaded to a tensor in __getitem__.
+    Targets follow the same pattern:
+      - targets["future_frames"]: (Tf, C, H, W) tensor.
+      - targets["future_paths"]: List[str | Path], lazily loaded.
     """
 
     def __init__(
@@ -219,8 +275,8 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
         log_names: List[str] | None = None,
         *,
         normalize: str = "[-1,1]",
-        min_hist_frames: int | None = None,   # Optional: pad by repeating segments if shorter than this length (e.g., 8)
-        min_fut_frames: int | None = None,    # Optional: minimum future frames length (pad if needed)
+        min_hist_frames: int | None = None,   # 可选：不足时按段循环补到该长度（例如 8）
+        min_fut_frames: int | None = None,    # 可选：未来帧最少长度（需要就补）
     ):
         super().__init__(cache_path, feature_builders, target_builders, log_names)
         assert normalize in ("[-1,1]", "[0,1]")
@@ -230,27 +286,27 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
 
     def _load_one_image(self, p: Union[str, Path]) -> torch.Tensor:
         p = Path(p)
-        # Uniformly read with PIL, then convert to RGB
+        # 统一用 PIL 读取，再转 RGB
         img = Image.open(p).convert("RGB")
         arr = np.array(img)  # (H,W,3) uint8
         return _to_chw_float_tensor(arr, normalize=self.normalize)
 
     def _maybe_load_images_from_paths(self, maybe_paths: Any) -> torch.Tensor:
         """
-        Supports:
-          - Already a Tensor: returned directly
-          - List[str|Path]: lazily loaded -> (T,C,H,W) Tensor
+        Supported inputs:
+          - Tensor: returned directly.
+          - List[str | Path]: lazily loaded to a (T, C, H, W) tensor.
         """
         if isinstance(maybe_paths, torch.Tensor):
             return maybe_paths
         if isinstance(maybe_paths, (list, tuple)) and len(maybe_paths) > 0:
             imgs = [self._load_one_image(p) for p in maybe_paths]
             return torch.stack(imgs, dim=0)
-        # If empty, return an empty Tensor as placeholder
+        # 空的情况，返回一个空 Tensor，占位
         return torch.empty(0, 3, 0, 0)
 
     def __getitem__(self, idx: int) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
-        features, targets = self._load_scene_with_token(self.tokens[idx])
+        features, targets, token = self._load_scene_with_token(self.tokens[idx])
 
         if "images" in features:
             images = self._maybe_load_images_from_paths(features["images"])
@@ -260,6 +316,7 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
             raise KeyError("Cached features must contain either 'images' or 'image_paths'.")
 
         features["images"] = images
+        features['token'] = token
         if "image_paths" in features:
             del features["image_paths"]
 
@@ -278,7 +335,7 @@ class CacheOnlyDatasetLazyIO(CacheOnlyDataset):
         return features, targets
 
 # =========================================
-# collate: NavSim -> batch required for training loop
+# collate：NavSim -> 训练循环所需的 batch
 # =========================================
 
 def _to_tensor(x, dtype=torch.float32):
@@ -295,19 +352,20 @@ def navsim_genie_collate_fn(
     batch: List[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]
 ):
     """
+    Collate function for NavSim data.
     Inputs:
-      features[i]["images"]           : (T_hist, C, H, W) in [-1,1]
-      targets[i]["trajectory"]        : (L, C_action)
-      targets[i].get("future_frames"): Optional (T_fut, C, H, W) -- filled by TrajectoryTargetBuilder
+      features[i]["images"]            : (T_hist, C, H, W) in [-1, 1]
+      targets[i]["trajectory"]         : (L, C_action)
+      targets[i].get("future_frames")  : optional (T_fut, C, H, W) populated by TrajectoryTargetBuilder.
     Outputs:
-      video         : (B, C, 1, T_hist, H, W)
-      actions       : (B, L, C_action)
-      caption       : list[str], len=B
-      future_video  : (B, C, 1, T_fut, H, W) -- returned only if all in batch have future_frames
+      video        : (B, C, 1, T_hist, H, W)
+      actions      : (B, L, C_action)
+      caption      : list[str] of length B
+      future_video : (B, C, 1, T_fut, H, W) if every element in the batch has future_frames.
     """
     features_list, targets_list = zip(*batch)
 
-    # --------- Historical video -> (B,C,1,T,H,W) ----------
+    # --------- 历史视频 -> (B,C,1,T,H,W) ----------
     vids = []
     for f in features_list:
         frames = f["images"]                           # (T,C,H,W)
@@ -318,6 +376,7 @@ def navsim_genie_collate_fn(
 
     # --------- caption ----------
     captions = []
+    token_list = []
     for f in features_list:
         hist = f['history_trajectory']
         cmd  = f['driving_command']
@@ -326,12 +385,13 @@ def navsim_genie_collate_fn(
         spd = float(torch.linalg.norm(vel).item())
         acc = float(torch.linalg.norm(acc_vec).item())
         captions.append(build_prompt_fixed(hist, cmd, spd, acc))
+        token_list.append(f['token'])
 
-    # --------- Action supervision ----------
+    # --------- actions 监督 ----------
     actions = torch.stack([_to_tensor(t['trajectory']) for t in targets_list], dim=0)  # (B,L,Ca)
     actions = norm_odo(actions)
 
-    # --------- Future video (optional) ----------
+    # --------- 未来视频（可选） ----------
     have_all_future = all(('future_frames' in t and t['future_frames'] is not None) for t in targets_list)
     if have_all_future:
         fut_vids = []
@@ -342,11 +402,13 @@ def navsim_genie_collate_fn(
             fut_vids.append(fut.permute(1, 0, 2, 3).unsqueeze(1).unsqueeze(0).contiguous())
         future_video = torch.cat(fut_vids, dim=0)      # (B,C,1,Tf,H,W)
 
-    # --------- New: also return metadata in batch ----------
+    # --------- 新增：把元信息也 batch 化返回 ----------
     hist_trajs = torch.stack([_to_tensor(f['history_trajectory']) for f in features_list], dim=0)  # (B,Th,3)
     cmds = torch.stack([_to_tensor(f['driving_command']) for f in features_list], dim=0)           # (B,C_cmd)
     vels = torch.stack([_to_tensor(f['vel']) for f in features_list], dim=0)   # (B,2)
     accs = torch.stack([_to_tensor(f['acc']) for f in features_list], dim=0)   # (B,2)
+
+    
 
     out = {
         "video": video,                 # (B,C,1,T,H,W)
@@ -355,7 +417,8 @@ def navsim_genie_collate_fn(
         "history_trajectory": hist_trajs,  # (B,Th,3)
         "driving_command": cmds,        # (B,C_cmd)
         "vel": vels,                    # (B,2)
-        "acc": accs,                    # (B,2)
+        "acc": accs,
+        'token_list': token_list,                    # (B,2)
     }
     out["future_video"] = future_video
 
@@ -377,12 +440,13 @@ def denorm_odo(normalized_trajectory: torch.Tensor) -> torch.Tensor:
 
 def _pad_to_8n1(x_5d: torch.Tensor) -> torch.Tensor:
     """
-    Args:
-        x_5d: (B*, C, T, H, W) -- sequential frames
-    Returns: T' satisfying 8n+1; pads tail by repeating last frame
+    Pads a temporal sequence so that the final length satisfies 8n+1 by
+    repeating the last frame at the tail.
+    Input:  x_5d with shape (B*, C, T, H, W).
+    Output: tensor with shape (B*, C, T', H, W), where T' satisfies 8n+1.
     """
     T = x_5d.shape[2]
-    need = (1 - (T % 8)) % 8  # such that (T + need) % 8 == 1
+    need = (1 - (T % 8)) % 8  # 使得 (T + need) % 8 == 1
     if need > 0:
         tail = x_5d[:, :, -1:, :, :].repeat(1, 1, need, 1, 1)
         x_5d = torch.cat([x_5d, tail], dim=2)
@@ -391,25 +455,25 @@ def _pad_to_8n1(x_5d: torch.Tensor) -> torch.Tensor:
 
 def _to_8n1(video_5d: torch.Tensor, ctx_5d: torch.Tensor = None):
     """
-    Args:
-        video_5d: (B*V, C, T, H, W) -- future sequence
-        ctx_5d: (B*V, C, 1, H, W) -- context (last historical frame), can be None
-    Returns: (B*V, C, T', H, W), where T' satisfies 8n+1
+    video_5d: (B*V, C, T, H, W)    —— 未来序列
+    ctx_5d  : (B*V, C, 1, H, W)    —— 上下文（历史最后一帧），可为 None
+
+    返回: (B*V, C, T', H, W)，其中 T' 满足 8n+1
     """
     assert video_5d.dim() == 5
     if ctx_5d is not None:
         assert ctx_5d.shape[:2] == video_5d.shape[:2] and ctx_5d.shape[3:] == video_5d.shape[3:]
-        video_5d = torch.cat([ctx_5d, video_5d], dim=2)   # First add 1 context frame
+        video_5d = torch.cat([ctx_5d, video_5d], dim=2)   # 先加 1 帧上下文
 
     T = video_5d.shape[2]
-    r = (1 - (T % 8)) % 8            # Number of frames to pad, such that (T + r) % 8 == 1
+    r = (1 - (T % 8)) % 8            # 需要补的帧数，使得 (T + r) % 8 == 1
     if r > 0:
         tail = video_5d[:, :, -1:, :, :].repeat(1, 1, r, 1, 1)
         video_5d = torch.cat([video_5d, tail], dim=2)
     return video_5d
 
 # ===========================
-# Unified Trainer (Rewritten Version)
+# 统一 Trainer（重写版）
 # ===========================
 class State:
     seed: int = None
@@ -428,21 +492,21 @@ class State:
 
 class UnifiedTrainer:
     """
-    - Data: From NavSim (SceneLoader/Dataset built within prepare_dataset/prepare_val_dataset)
-    - Model/Training Loop: Follows your previous diffusion training logic (video/action branches, flow matching, accelerate)
-    - Text: Caption generated by collate using a fixed template
+    Unified trainer.
+      - Data: from NavSim (SceneLoader/Dataset are built in prepare_dataset/prepare_val_dataset).
+      - Model/training loop: reuses diffusion training logic (video/action branches, flow matching, accelerate).
+      - Text: captions are generated by the collate function using a fixed template.
     """
 
     def __init__(self, cfg,config_file):
         """
-        Args:
-            cfg: Your Hydra training configuration, must include:
-              - NavSim paths and split:
-                  navsim_log_path, sensor_blobs_path, train_logs, val_logs,
-                  train_test_split.scene_filter, cache_path, force_cache_computation
-              - dataloader.params: {batch_size, num_workers, ...}
-              - genie_config: Model/optimization related YAML path (following your genie configuration)
-              - output_dir, logging_dir, mixed_precision, gradient_accumulation_steps, etc.
+        cfg：你的 hydra 训练配置，需包含：
+          - navsim 路径与 split：
+              navsim_log_path, sensor_blobs_path, train_logs, val_logs,
+              train_test_split.scene_filter, cache_path, force_cache_computation
+          - dataloader.params: {batch_size, num_workers, ...}
+          - genie_config: 模型/优化相关 yaml 路径（沿用你的 genie 配置）
+          - output_dir, logging_dir, mixed_precision, gradient_accumulation_steps, etc.
         """
         self.cfg = cfg
 
@@ -469,7 +533,7 @@ class UnifiedTrainer:
         self._init_directories()
 
         self.args.enable_val = getattr(self.args, "enable_val", False)
-        # Logging & save directory
+        # 日志 & 保存目录
         if self.state.accelerator.is_main_process:
             start_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
             self.save_folder = os.path.join(self.cfg.output_dir, start_time)
@@ -477,21 +541,40 @@ class UnifiedTrainer:
         else:
             self.save_folder = self.cfg.output_dir
 
-        self.use_ema = bool(getattr(self.args, "use_ema", True))
-        self.ema_decay = float(getattr(self.args, "ema_decay", 0.9999))
-        self.ema_update_after_step = int(getattr(self.args, "ema_update_after_step", 0))  # 0 means immediate effect
-        self.ema_inv_gamma = float(getattr(self.args, "ema_inv_gamma", 1.0))              # warmup curve
-        self.ema_power = float(getattr(self.args, "ema_power", 2/3))                      # warmup curve
-        self.ema_min_decay = float(getattr(self.args, "ema_min_decay", 0.0))
-        
-        print(
-            f"[EMA Config] use_ema={self.use_ema}, "
-            f"ema_decay={self.ema_decay}, ema_min_decay={self.ema_min_decay}, "
-            f"ema_update_after_step={self.ema_update_after_step}, "
-            f"use_ema_warmup={getattr(self.args, 'use_ema_warmup', False)}, "
-            f"ema_inv_gamma={self.ema_inv_gamma}, ema_power={self.ema_power}"
-        )
-    # -------- Initialization ----------
+        os.environ.setdefault("OMP_NUM_THREADS","1")
+        os.environ.setdefault("MKL_NUM_THREADS","1")
+        os.environ.setdefault("OPENBLAS_NUM_THREADS","1")
+        # self._reward_executor = ThreadPoolExecutor(
+        #     max_workers=getattr(self.args, "reward_workers", 128)
+        # )
+        # self._reward_tls = threading.local()
+        # self._reward_lock = threading.Lock()   # 当模拟器不线程安全时作为兜底
+        # # 如果你知道模拟器是线程安全的（或每线程各有副本），设置：
+        # self._reward_thread_safe = getattr(self.args, "reward_thread_safe", False)
+
+    def _numa_groups(self, per_group):
+        return [list(range(0,48))[:per_group], list(range(48,96))[:per_group]]
+
+    def build_pool(self, per_group=24, lru_cap=512):
+        from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator import PDMSimulator
+        from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PDMScorer
+
+        ts = self.simulator.proposal_sampling  # TrajectorySampling 对象
+        sim_cls, scorer_cls = PDMSimulator, PDMScorer
+        sim_kwargs    = {"proposal_sampling": ts}
+        scorer_kwargs = {"proposal_sampling": ts}
+
+        path_table = self.metric_cache_loader.metric_cache_paths
+        self._pools = []
+        for numa_cpus in self._numa_groups(per_group):
+            ex = ProcessPoolExecutor(
+                max_workers=len(numa_cpus),
+                initializer=worker_init,
+                initargs=(sim_cls, sim_kwargs, scorer_cls, scorer_kwargs, lru_cap, numa_cpus),
+            )
+            self._pools.append(ex)
+
+    # -------- 初始化 ----------
     def _init_distributed(self):
         logging_dir = Path(self.cfg.output_dir, "./logging_dir")
         project_config = ProjectConfiguration(project_dir=self.cfg.output_dir, logging_dir=logging_dir)
@@ -553,7 +636,7 @@ class UnifiedTrainer:
             Path(self.cfg.output_dir).mkdir(parents=True, exist_ok=True)
             self.state.output_dir = self.cfg.output_dir
 
-    # -------- Dataset Construction ----------
+    # -------- 数据集构建 ----------
     def prepare_dataset(self):
         logger.info("Building NavSim training dataset")
         #agent: AbstractAgent = instantiate(self.cfg.agent)
@@ -646,7 +729,7 @@ class UnifiedTrainer:
         )
         logger.info(f"Val samples: {len(self.val_dataset)}")
 
-    # -------- Model/Optimizer etc. ----------
+    # -------- 模型/优化器等 ----------
     def prepare_models(self):
         logger.info("Initializing models")
         device = self.state.accelerator.device
@@ -671,6 +754,16 @@ class UnifiedTrainer:
         sampler_cls = SAMPLERS["shifted_logit_normal"]
         self._timestep_sampler = sampler_cls()
 
+        metric_cache_path: str = "navsim_metric_cache/metric_cache_train"
+        scorer_config: PDMScorerConfig = field(default_factory=lambda: PDMScorerConfig(
+            progress_weight=5.0, ttc_weight=5.0, comfortable_weight=2.0
+        ))
+
+        self.metric_cache_loader = MetricCacheLoader(Path(metric_cache_path))
+        proposal_sampling = TrajectorySampling(time_horizon=4, interval_length=0.1)
+        self.simulator = PDMSimulator(proposal_sampling)
+        self.train_scorer = PDMScorer(proposal_sampling)
+
 
     def prepare_trainable_parameters(self):
         logger.info("Initializing trainable parameters")
@@ -680,14 +773,16 @@ class UnifiedTrainer:
         # if self.args.gradient_checkpointing:
         #     self.diffusion_model.enable_gradient_checkpointing()
 
-        # if self.cfg.allow_tf32 and torch.cuda.is_available():
-        #     torch.backends.cuda.matmul.allow_tf32 = True
+        if self.args.allow_tf32 and torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
 
         train_mode = self.args.train_mode
         trainable_params = []
         for name, p in self.diffusion_model.named_parameters():
             if train_mode == 'action_only':
                 p.requires_grad = ('action_' in name)
+            elif train_mode == 'scorer_only':
+                p.requires_grad = ('traj_' in name)
             elif train_mode == "video_only":
                 p.requires_grad = ('action_' not in name)
             elif train_mode in ("all", "action_full"):
@@ -703,7 +798,7 @@ class UnifiedTrainer:
         if self.state.accelerator.is_main_process:
             def _format_param(name: str, p: torch.nn.Parameter) -> str:
                 try:
-                    shape_str = str(tuple(p.shape))  # e.g., "(512, 2048)"
+                    shape_str = str(tuple(p.shape))  # 例如 "(512, 2048)"
                 except Exception:
                     shape_str = "<no-shape>"
                 try:
@@ -774,26 +869,6 @@ class UnifiedTrainer:
             num_cycles=1,
             power=1.0,
         )
-        self.ema = None
-        self._ema_params = None
-        if self.use_ema:
-            base_model = unwrap_model(self.state.accelerator, self.diffusion_model)
-            # Unified tracked parameter order (only includes requires_grad=True)
-            self._ema_params = [p for p in base_model.parameters() if p.requires_grad]
-            self.ema = EMAModel(
-                parameters=self._ema_params,
-                decay=self.ema_decay,
-                min_decay=self.ema_min_decay,
-                update_after_step=self.ema_update_after_step,
-                use_ema_warmup=True,
-                inv_gamma=self.ema_inv_gamma,
-                power=self.ema_power,
-            )
-            # Move to correct device (especially useful with ZeRO/offload; harmless if not needed)
-            try:
-                self.ema.to(self.state.accelerator.device)
-            except Exception:
-                pass
         #self.state.num_updates_per_epoch = num_upd_per_epoch
 
     def prepare_for_training(self):
@@ -803,47 +878,9 @@ class UnifiedTrainer:
     def prepare_trackers(self):
         self.state.accelerator.init_trackers("navsim_train", config=self.args.__dict__)
 
-    def _create_first_frame_conditioning_mask(
-        self, batch_size: int, sequence_length: int, height: int, width: int, device: torch.device
-    ) -> Tensor:
-        """Create conditioning mask for first frame conditioning.
 
-        Returns:
-            Boolean mask where True indicates first frame tokens (if conditioning is enabled)
-        """
-        conditioning_mask = torch.zeros(batch_size, sequence_length, dtype=torch.bool, device=device)
 
-        first_frame_conditioning_p = 1
-        if (
-            first_frame_conditioning_p > 0
-            and random.random() < first_frame_conditioning_p
-        ):
-            first_frame_end_idx = height * width
-            if first_frame_end_idx < sequence_length:
-                conditioning_mask[:, :first_frame_end_idx] = True
 
-        return conditioning_mask
-
-    def _create_timesteps_from_conditioning_mask(
-        self, conditioning_mask: Tensor, sampled_timestep_values: Tensor
-    ) -> Tensor:
-        """Create timesteps based on conditioning mask.
-
-        Args:
-            conditioning_mask: Boolean mask of shape (batch_size, sequence_length),
-            where True = conditioning, False = target.
-            sampled_timestep_values: Sampled timestep values for target tokens of shape (batch_size,)
-
-        Returns:
-            Timesteps tensor with 0 for conditioning tokens, sampled values for target tokens
-        """
-        # Expand sampled values to match conditioning mask shape
-        expanded_timesteps = sampled_timestep_values.unsqueeze(1).expand_as(conditioning_mask)
-
-        # Use conditioning mask to select between 0 (conditioning) and sampled values (target)
-        return torch.where(conditioning_mask, 0, expanded_timesteps)
-
-    # -------- Training ----------
     def train(self):
         logger.info("Starting training")
         logger.info("Memory before: %s", json.dumps(get_memory_statistics(), indent=2))
@@ -878,13 +915,13 @@ class UnifiedTrainer:
                 logs = {}
                 with accel.accumulate(self.diffusion_model):
                     # ---------------------------
-                    # 1) Retrieve historical frames and optional future frames
+                    # 1) 取历史帧与可选未来帧
                     # ---------------------------
                     video = batch['video'].to(accel.device, dtype=weight_dtype).contiguous()   # (B,C,1,T_hist,H,W)
                     b, c, v, t, h, w = video.shape
                     assert t == 4
                     video = rearrange(video, 'b c v t h w -> (b v) c t h w')                   # (B*V,C,T_hist,H,W)
-                    mem = video                                                                # Here your input hist is 8 frames
+                    mem = video                                                                # 这里你的输入 hist 就是 8 帧
 
                     future_video = batch['future_video'].to(accel.device, dtype=weight_dtype).contiguous()  # (B,C,1,T_fut,H,W) torch.Size([16, 3, 1, 8, 1088, 1920])
                     future_video = rearrange(future_video, 'b c v t h w -> (b v) c t h w')
@@ -921,7 +958,7 @@ class UnifiedTrainer:
                         "acc": acc_vec,
                     }
                     # ---------------------------
-                    # 2) Text conditioning (with dropout)
+                    # 2) 文本条件（带 dropout）
                     # ---------------------------
                     captions = batch['caption']
                     dropout_factor = torch.rand(b, device=accel.device, dtype=weight_dtype)
@@ -934,7 +971,7 @@ class UnifiedTrainer:
 
 
                     # ---------------------------
-                    # 4) Flow-matching (video side, only for noise/timesteps; video loss may not be calculated)
+                    # 4) flow-matching（视频侧，仅用于造噪声/时步；可不算视频损失）
                     # ---------------------------
                     # action_weights = compute_density_for_timestep_sampling(
                     #     weighting_scheme=self.args.flow_weighting_scheme,
@@ -953,7 +990,7 @@ class UnifiedTrainer:
                     )  # set initial frames noise to 0
 
                     noisy_latents = noise
-                    sigmas_vec = self._timestep_sampler.sample_for(noisy_latents)   # <== This line is required by you
+                    sigmas_vec = self._timestep_sampler.sample_for(noisy_latents)   # <== 你要求必须要有的这一行
                     sigmas = sigmas_vec                                            # (b,)
                     timesteps = torch.round(sigmas_vec * 1000.0).long()            # (b,)
 
@@ -998,8 +1035,8 @@ class UnifiedTrainer:
                         latent_frames=latent_frames,
                         latent_height=latent_height,
                         latent_width=latent_width,
-                        return_video=self.args.return_video or self.args.return_action,                     # Do not return video prediction
-                        return_action=self.args.return_action,                     # Only return action
+                        return_video=self.args.return_video or self.args.return_action,                     # 不回传视频预测
+                        return_action=self.args.return_action,                     # 只回传动作
                         video_attention_mask=None,
                         action_timestep=action_timesteps,
                         action_states=noisy_actions.to(accel.device, dtype=weight_dtype),
@@ -1009,7 +1046,7 @@ class UnifiedTrainer:
                     pred_vel = pred_all['action']                                              # (B, L, Ca)
 
                     # ---------------------------
-                    # 7) Loss (action)
+                    # 7) 损失（动作）
                     # ---------------------------
                     target_vel = noise_actions - actions
                     loss_action = ((pred_vel - target_vel).pow(2)).mean()
@@ -1021,13 +1058,6 @@ class UnifiedTrainer:
                         logs["grad_norm"] = grad_norm
                     self.optimizer.step()
                     self.lr_scheduler.step()
-
-                    # >>> EMA update (only on sync gradient steps, to avoid intermediate noise from gradient accumulation) <<<
-                    if self.use_ema and accel.sync_gradients:
-                        base = unwrap_model(accel, self.diffusion_model)
-                        ema_params_now = [p for p in base.parameters() if p.requires_grad]  # Consistent with initialization set
-                        self.ema.step(ema_params_now)
-
                     self.optimizer.zero_grad()
                 # logging
                 loss = accel.reduce(loss.detach(), reduction='mean')
@@ -1044,41 +1074,22 @@ class UnifiedTrainer:
                 if (global_step % self.args.steps_to_log == 0) or (step == 0):
                     accel.log(logs, step=global_step)
                     if accel.is_main_process:
-                        # Optional: also print to console
+                        # 可选：控制台也打一条
                         logger.info(f"[step {global_step}] loss={logs['loss']:.4f}, lr={logs['lr']:.6g}")
 
-                # Validation
+                # 验证
                 if (self.args.enable_val 
                     and self.val_dataloader is not None 
                     and global_step % self.args.steps_to_val == 0):
                     accel.wait_for_everyone()
-
-                    if self.use_ema:
-                        model_real = unwrap_model(accel, self.diffusion_model)
-                        ema_params_now = [p for p in model_real.parameters() if p.requires_grad]
-                        self.ema.store(ema_params_now)
-                        self.ema.copy_to(ema_params_now)
-
                     model_save_dir = os.path.join(self.save_folder, f'Validation_step_{global_step}')
                     self.validate(accel, model_save_dir, global_step)
-
-                    if self.use_ema:
-                        self.ema.restore(ema_params_now)
-
                     accel.wait_for_everyone() 
-                # Save
+                # 保存
                 if global_step % self.args.steps_to_save == 0 and accel.is_main_process:
                     model_to_save = unwrap_model(accel, self.diffusion_model)
                     model_save_dir = os.path.join(self.save_folder, f'step_{global_step}')
                     model_to_save.save_pretrained(model_save_dir, safe_serialization=True)
-
-                    if self.use_ema:
-                        ema_params_now = [p for p in model_to_save.parameters() if p.requires_grad]
-                        self.ema.store(ema_params_now)
-                        self.ema.copy_to(ema_params_now)
-                        model_save_dir_ema = os.path.join(self.save_folder, f'step_{global_step}_ema')
-                        model_to_save.save_pretrained(model_save_dir_ema, safe_serialization=True)
-                        self.ema.restore(ema_params_now)
                     del model_to_save
 
                 if global_step >= self.state.train_steps:
@@ -1093,25 +1104,287 @@ class UnifiedTrainer:
             model_save_dir = os.path.join(self.save_folder, f'step_{global_step}')
             self.diffusion_model.save_pretrained(model_save_dir, safe_serialization=True)
 
-            if self.use_ema:
-                ema_params_now = [p for p in self.diffusion_model.parameters() if p.requires_grad]
-                self.ema.store(ema_params_now)
-                self.ema.copy_to(ema_params_now)
-                final_dir_ema = os.path.join(self.save_folder, f'step_{global_step}_ema')
-                self.diffusion_model.save_pretrained(final_dir_ema, safe_serialization=True)
-                self.ema.restore(ema_params_now)
-                
         del self.diffusion_model, self.scheduler
         free_memory()
         logger.info(f"Memory after training: {json.dumps(get_memory_statistics(), indent=2)}")
         accel.end_training()
+
+    def train_stage_two(self):
+        logger.info("Starting training")
+        logger.info("Memory before: %s", json.dumps(get_memory_statistics(), indent=2))
+
+        self.build_pool(per_group=48, lru_cap=20000)
+
+        accel = self.state.accelerator
+
+        per_device_bs = self.cfg.dataloader.params.batch_size
+        world_size    = accel.num_processes
+        grad_accum    = self.cfg.gradient_accumulation_steps
+        global_bs     = per_device_bs * world_size * grad_accum
+
+        logger.info(f"Effective Global Batch Size = {global_bs} "
+                    f"(= {per_device_bs} per_device x {world_size} world x {grad_accum} grad_accum)")
+        logger.info(f"Num updates / epoch       = {self.state.num_updates_per_epoch}")
+        logger.info(f"Train epochs              = {self.state.train_epochs}")
+        logger.info(f"Total train steps         = {self.state.train_steps}")
+
+        weight_dtype = self.state.weight_dtype
+        device = self.state.accelerator.device
+        generator = torch.Generator(device=accel.device)
+        if self.cfg.seed is not None:
+            generator = generator.manual_seed(self.cfg.seed)
+        self.state.generator = generator
+
+        pipe = self.pipeline_class(
+            self.scheduler, self.vae, self.text_encoder, self.tokenizer,
+            unwrap_model(accel, self.diffusion_model) if accel is not None else self.diffusion_model
+        )
+
+        negative_prompt = getattr(
+            self.args, "negative_prompt",
+            "worst quality, low quality, blurry, jittery, distorted, motion blur, ghosting, "
+            "flickering, stuttering, camera shake, unstable footage, warping, trailing artifacts, "
+            "temporal inconsistency, jerky motion, choppy framerate"
+        )
+        num_groups = 16
+        progress = range(self.state.train_steps)
+        global_step = 0
+        running_loss = 0.0
+
+        for epoch in range(self.state.train_epochs):
+            self.diffusion_model.train()
+            for step, batch in enumerate(self.train_dataloader):
+                logs = {}
+                with accel.accumulate(self.diffusion_model):
+
+                    video = batch['video']  # shape (B,C,1,T_hist,H,W)
+                    B, C, V, T_hist, H, W = video.shape
+                    assert T_hist == 4
+                    assert V == 1, f"当前验证假设单视角，拿到 V={V}"
+
+                    prompts      = batch['caption']                 # list[str], len=B
+                    gt_actions   = batch['actions']              # (B,L,Ca)
+                    action_chunk = gt_actions.shape[1]
+                    action_dim   = gt_actions.shape[2]
+
+                    cmd_onehot = batch['driving_command']      # (B,Ccmd)
+                    vel        = batch['vel']                         # (B,2)
+                    acc_vec    = batch['acc']                     # (B,2)
+
+                    token_list = batch['token_list']
+
+                    preds_actions = []    # 每项形状 (1, K, L, Ca)
+                    ctx_tokens    = []    # 每项形状 (1, S_ctx, D)  (你的 pipeline 输出 latent 给 'videos')
+                    for i in range(B):
+                        cond_tensor = video[i].squeeze(1)       # (C, T, H, W)
+                        cond_tensor = rearrange(cond_tensor, 'c t h w -> t c h w').contiguous()  # (T,C,H,W)
+                        cond_pils   = self._tensor_video_to_pils(cond_tensor)  
+                        condition   = LTXVideoCondition(video=cond_pils, frame_index=0)
+
+                        prompt_i = [prompts[i]]
+
+                        cmd_onehot_b1 = batch['driving_command'][i:i+1].to(device, dtype=weight_dtype)        # (1, C_cmd)
+                        vel_b1        = batch['vel'][i:i+1].to(device, dtype=weight_dtype)                    # (1, 2)
+                        acc_b1        = batch['acc'][i:i+1].to(device, dtype=weight_dtype)                    # (1, 2)
+
+                        context_dict = {
+                            "cmd_onehot": cmd_onehot_b1,
+                            "vel":        vel_b1,
+                            "acc":        acc_b1,
+                        }
+
+                        num_groups = 16
+
+                        with torch.inference_mode():
+                            out = pipe.infer(
+                                conditions=[condition],
+                                prompt=prompt_i,
+                                negative_prompt=negative_prompt,          # 可选
+                                num_inference_steps=10,
+                                guidance_scale=1.0,
+                                height=704,
+                                width=1280,
+                                generator=generator,
+                                num_videos_per_prompt=num_groups,
+                                output_type = "latent",
+                                return_action=True,
+                                return_video=False,          # 只要动作
+                                action_chunk=action_chunk,   # 与 GT 对齐
+                                action_dim=action_dim,
+                                context_dict=context_dict,
+                                pixel_wise_timestep = self.args.pixel_wise_timestep,
+                                noise_seed=42,
+                                image_cond_noise_scale=0.0
+                            )
+
+
+                        pred_action_i = out['actions']     # (K, L, Ca)
+                        ctx_latent_i  = out['videos']      # (1, S_ctx, D)  —— 你 pipeline 返回的 ctx_tokens
+
+                        # 反归一化到物理量域（PDM 需要真值单位）
+                        pred_action_i = denorm_odo(pred_action_i)
+
+                        preds_actions.append(pred_action_i.detach().unsqueeze(0))
+                        ctx_tokens.append(ctx_latent_i.detach())
+
+
+                    pred_action_bk = torch.cat(preds_actions, dim=0)   # (B, K, L, Ca)
+                    ctx_tokens_b   = torch.cat(ctx_tokens,    dim=0)   # (B, S_ctx, D)
+
+                    # --------- scorer 前向（得到 logits） ----------
+                    pred_logits_bk = self.diffusion_model.traj_scorer(  # (B,K)
+                        actions_bk = pred_action_bk.to(device, dtype=weight_dtype),
+                        ctx_tokens = ctx_tokens_b.to(device, dtype=weight_dtype)
+                    )
+
+                    # --------- PDM 打分（得到 (B,K) 的分数） ----------
+                    # 先把本 batch 必要的 metric_cache 都加载成 dict，避免 reward_fn 里逐个再查硬盘
+                    # cache_dict = {}
+                    # for token in token_list:
+                    #     path = self.metric_cache_loader.metric_cache_paths[token]
+                    #     with lzma.open(path, 'rb') as f:
+                    #         cache_dict[token] = pickle.load(f)
+
+                    pdms_bk = self.reward_fn(pred_action_bk, token_list)   # (B,K), no grad
+                    S_hat = pdms_bk.clamp(0, 1).to(device=device, dtype=weight_dtype)
+                    # --------- 训练信号：分布匹配（soft target） ----------
+                    # 不新增超参，τ=1；用 softmax(PDM) 做 target 分布，CE 训练 scorer
+                    loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                        pred_logits_bk, S_hat
+                    )
+
+                    assert not torch.isnan(loss), "NaN loss detected"
+                    accel.backward(loss)
+
+                    if accel.sync_gradients and accel.distributed_type != DistributedType.DEEPSPEED:
+                        grad_norm = accel.clip_grad_norm_(self.diffusion_model.parameters(), self.args.max_grad_norm)
+                        logs["grad_norm"] = grad_norm
+
+                    self.optimizer.step()
+                    self.lr_scheduler.step()
+                    self.optimizer.zero_grad()
+                # logging
+                loss = accel.reduce(loss.detach(), reduction='mean')
+                running_loss += loss.item()
+                if accel.sync_gradients:
+                    global_step += 1
+
+                logs.update({"loss": loss.item(), "lr": self.lr_scheduler.get_last_lr()[0]})
+                if (global_step % self.args.steps_to_log == 0) or (step == 0):
+                    accel.log(logs, step=global_step)
+                    if accel.is_main_process:
+                        # 可选：控制台也打一条
+                        logger.info(f"[step {global_step}] loss={logs['loss']:.4f}, lr={logs['lr']:.6g}")
+
+                # 验证
+                if (self.args.enable_val 
+                    and self.val_dataloader is not None 
+                    and global_step % self.args.steps_to_val == 0):
+                    accel.wait_for_everyone()
+                    model_save_dir = os.path.join(self.save_folder, f'Validation_step_{global_step}')
+                    self.validate(accel, model_save_dir, global_step)
+                    accel.wait_for_everyone() 
+                # 保存
+                if global_step % self.args.steps_to_save == 0 and accel.is_main_process:
+                    model_to_save = unwrap_model(accel, self.diffusion_model)
+                    model_save_dir = os.path.join(self.save_folder, f'step_{global_step}')
+                    model_to_save.save_pretrained(model_save_dir, safe_serialization=True)
+                    del model_to_save
+
+                if global_step >= self.state.train_steps:
+                    logger.info("Reached max train steps")
+                    break
+
+            logger.info(f"Epoch {epoch+1} done. Mem: {json.dumps(get_memory_statistics(), indent=2)}")
+
+        accel.wait_for_everyone()
+        if accel.is_main_process:
+            self.diffusion_model = unwrap_model(accel, self.diffusion_model)
+            model_save_dir = os.path.join(self.save_folder, f'step_{global_step}')
+            self.diffusion_model.save_pretrained(model_save_dir, safe_serialization=True)
+
+        del self.diffusion_model, self.scheduler
+        free_memory()
+        logger.info(f"Memory after training: {json.dumps(get_memory_statistics(), indent=2)}")
+        accel.end_training()
+        if hasattr(self, "_pools"):
+            for ex in self._pools:
+                ex.shutdown(wait=True)
+    
+    def _get_thread_local_ctx(self):
+        """
+        每个线程拿到自己的 simulator / scorer 副本，避免并发冲突。
+        优先用 clone；clone 不可用时尝试 deepcopy；都不行就回退到共享对象。
+        """
+        tls = self._reward_tls
+        if not hasattr(tls, "sim") or not hasattr(tls, "scorer"):
+            sim = None
+            scorer = None
+            try:
+                if hasattr(self.simulator, "clone"):
+                    sim = self.simulator.clone()
+                else:
+                    sim = deepcopy(self.simulator)
+            except Exception:
+                sim = self.simulator  # 回退到共享
+
+            try:
+                if hasattr(self.train_scorer, "clone"):
+                    scorer = self.train_scorer.clone()
+                else:
+                    scorer = deepcopy(self.train_scorer)
+            except Exception:
+                scorer = self.train_scorer  # 回退到共享
+
+            tls.sim = sim
+            tls.scorer = scorer
+        return tls.sim, tls.scorer
+
+
+    def reward_fn(self, pred_traj: torch.Tensor, tokens_list, cache_dict=None):
+        if pred_traj.ndim == 3:
+            pred_traj = pred_traj.unsqueeze(1)
+        B, K, L, C = pred_traj.shape
+        arr = pred_traj.detach().cpu().numpy()
+
+        # 按 token 聚合 (一次只传一块)
+        bucket = {}
+        for i, token in enumerate(tokens_list):
+            bucket.setdefault(token, []).extend([arr[i, k] for k in range(K)])
+
+        tokens = list(bucket.keys())
+        futures = []
+        for idx, token in enumerate(tokens):
+            ex = self._pools[idx & 1] if len(self._pools)>1 else self._pools[0]
+            cache_path = self.metric_cache_loader.metric_cache_paths[token]  # 只取用到的路径
+            trajs_np = np.asarray(bucket[token], dtype=arr.dtype)   # 确保是单块连续内存
+            futures.append(ex.submit(score_token_batch, (token, cache_path, trajs_np)))
+
+        scores = np.zeros((B, K), dtype=np.float32)
+        pos = {}
+        for i, token in enumerate(tokens_list):
+            for k in range(K):
+                pos.setdefault(token, []).append((i,k))
+
+        for fut in futures:
+            token, vals = fut.result()
+            assert len(vals) == len(pos[token]), f"mismatch for token={token}"
+            for (i,k), s in zip(pos[token], vals):
+                scores[i, k] = s
+
+        out = torch.tensor(scores, device=pred_traj.device, dtype=pred_traj.dtype)
+        if K == 1:
+            out = out.squeeze(1)
+        return out.detach()
+
+
 
     def _forward_pass(self, latents, timesteps, prompt_embeds, prompt_attention_mask,
                       latent_frames, latent_height, latent_width,
                       return_video, return_action, video_attention_mask,
                       action_timestep=None, action_states=None, action_dim=None,
                       context_dict = None,rope_interpolation_scale=None):
-        """Thin wrapper, compatible with your utils.forward_pass interface/return."""
+        """薄封装，兼容你 utils.forward_pass 的接口/返回。"""
         return forward_pass(
             model=self.diffusion_model,
             timesteps=timesteps,
@@ -1133,9 +1406,8 @@ class UnifiedTrainer:
     @staticmethod
     def _tensor_video_to_pils(video: torch.Tensor):
         """
-        Args:
-            video: (T,C,H,W) in [-1,1] or [0,1]
-        Returns: List[PIL.Image]
+        video: (T, C, H, W) in [-1, 1] or [0, 1]
+        return: List[PIL.Image]
         """
         x = video.detach().cpu()
         if x.min() < 0:
@@ -1150,37 +1422,36 @@ class UnifiedTrainer:
     
     def _pad_to_8n1(self, x_5d: torch.Tensor) -> torch.Tensor:
         """
-        Args:
-            x_5d: (B*, C, T, H, W) -- sequential frames
-        Returns: T' satisfying 8n+1; pads tail by repeating last frame
+        x_5d: (B*, C, T, H, W) —— 顺序序列
+        返回 T' 满足 8n+1；尾部用最后一帧 repeat。
         """
         T = x_5d.shape[2]
-        need = (1 - (T % 8)) % 8  # such that (T + need) % 8 == 1
+        need = (1 - (T % 8)) % 8  # 使得 (T + need) % 8 == 1
         if need > 0:
             tail = x_5d[:, :, -1:, :, :].repeat(1, 1, need, 1, 1)
             x_5d = torch.cat([x_5d, tail], dim=2)
         return x_5d
 
-    # -------- Validation ----------
+    # -------- 验证 ----------
     @torch.inference_mode()
     def validate(self, accelerator, model_save_dir, global_step):
         """
-        Performs action validation using the current NavSim collate format:
-        - Conditioning input: all historical frames from batch['video']
-        - Target: batch['actions']
-        - Metric: MSE(L2) over the entire validation set
-        - Artifacts: saves pred / gt to model_save_dir
+        使用 NavSim collate 的当前格式进行动作验证：
+        - 条件输入：batch['video'] 的全部历史帧
+        - 目标：batch['actions']
+        - 指标：全验证集的 MSE(L2)
+        - 产物：保存 pred / gt 到 model_save_dir
         """
         os.makedirs(model_save_dir, exist_ok=True)
 
-        # pipeline (unwrap deepspeed wrapper)
+        # pipeline（解包 deepspeed wrapper）
         pipe = self.pipeline_class(
             self.scheduler, self.vae, self.text_encoder, self.tokenizer,
             unwrap_model(accelerator, self.diffusion_model) if accelerator is not None else self.diffusion_model
         )
 
-        # Inference base hyperparameters (keep fields from your existing config)
-        num_steps   = 5
+        # 推理基础超参（保留你现有 config 的字段即可）
+        num_steps   = 10
         guidance    = float(getattr(self.args, "guidance_scale", 1.0))
         pixel_wise  = bool(getattr(self.args, "pixel_wise_timestep", True))
         seed        = int(getattr(self.args, "seed", 42))
@@ -1196,7 +1467,9 @@ class UnifiedTrainer:
 
         total_mse = 0.0
         total_count = 0
-
+        pdm_total = 0.0
+        pdm_count = 0
+        
         pbar = tqdm(
             total=len(self.val_dataloader),
             desc=f"Validating @ step {global_step}",
@@ -1204,22 +1477,26 @@ class UnifiedTrainer:
             dynamic_ncols=True
         )
 
+        num_groups = 16
+
         for batch in self.val_dataloader:
-            # Historical condition: (B,C,1,T,H,W) -> (B,C,T,H,W)
+            # 历史条件：(B,C,1,T,H,W) -> (B,C,T,H,W)
             video = batch['video']  # shape (B,C,1,T_hist,H,W)
             B, C, V, T_hist, H, W = video.shape
             assert T_hist == 4
-            assert V == 1, f"Current validation assumes single view, got V={V}"
+            assert V == 1, f"当前验证假设单视角，拿到 V={V}"
 
             prompts = batch['caption']            # list[str], len=B
             gt_actions = batch['actions']         # (B,L,Ca)
             action_chunk = gt_actions.shape[1]
             action_dim   = gt_actions.shape[2]
 
-            hist_traj = batch['history_trajectory']        # (B,Th,3)
             cmd_onehot = batch['driving_command']      # (B,Ccmd)
             vel = batch['vel']                    # (B,2)
             acc_vec = batch['acc']                # (B,2)
+
+            has_tokens = 'token_list' in batch
+            tokens_list = batch.get('token_list', None)
 
             for i in range(B):
                 cond_tensor = video[i].squeeze(1)       # (C, T, H, W)
@@ -1231,30 +1508,26 @@ class UnifiedTrainer:
                 prompt_i = [prompts[i]]
 
 
-                cmd_onehot_b1 = batch['driving_command'][i:i+1].to(device, dtype=weight_dtype)        # (1, C_cmd)
-                vel_b1        = batch['vel'][i:i+1].to(device, dtype=weight_dtype)                    # (1, 2)
-                acc_b1        = batch['acc'][i:i+1].to(device, dtype=weight_dtype)                    # (1, 2)
+                cmd_onehot_b1 = cmd_onehot[i:i+1].to(device, dtype=weight_dtype)
+                vel_b1        = vel[i:i+1].to(device, dtype=weight_dtype)
+                acc_b1        = acc_vec[i:i+1].to(device, dtype=weight_dtype)
 
-                context_dict = {
-                    "cmd_onehot": cmd_onehot_b1,
-                    "vel":        vel_b1,
-                    "acc":        acc_b1,
-                }
+                context_dict = {"cmd_onehot": cmd_onehot_b1, "vel": vel_b1, "acc": acc_b1}
 
                 out = pipe.infer(
                     conditions=[condition],
                     prompt=prompt_i,
-                    negative_prompt=negative_prompt,          # Optional
+                    negative_prompt=negative_prompt,          # 可选
                     num_inference_steps=num_steps,
                     guidance_scale=1.0,
                     height=704,
                     width=1280,
                     generator=generator,
-                    num_frames=18,
+                    num_videos_per_prompt=num_groups,
                     output_type = "latent",
                     return_action=True,
-                    return_video=False,          # Only action
-                    action_chunk=action_chunk,   # Align with GT
+                    return_video=False,          # 只要动作
+                    action_chunk=action_chunk,   # 与 GT 对齐
                     action_dim=action_dim,
                     context_dict=context_dict,
                     pixel_wise_timestep = self.args.pixel_wise_timestep,
@@ -1262,40 +1535,80 @@ class UnifiedTrainer:
                     image_cond_noise_scale=0.0
                 )
 
-                # Extract predicted actions, unify to (T,C) on cpu
-                if isinstance(out, (list, tuple)):
-                    out = out[0]
-                if isinstance(out, dict):
-                    pred_action = out['actions']
-                else:
-                    pred_action = out
-                pred_action = torch.as_tensor(pred_action).detach().float().cpu()
-                if pred_action.ndim == 3:  # (B,T,C) -> (T,C)
-                    pred_action = pred_action[0]
-                pred_action = pred_action
-                pred_action = denorm_odo(pred_action)
-                gt_i = denorm_odo(gt_actions[i].detach().float().cpu())
-                mse  = ((pred_action - gt_i)**2).mean().item()
+                # ---- 取出并整理形状 ----
+                # actions: (1,K,L,Ca)；ctx_latent: (1,S_ctx,D)  (若你返回的是别的形状，请在这里展平到 (1,S_ctx,D))
+                actions_1k = torch.as_tensor(out['actions']).detach()      # (K,L,Ca)
+                if actions_1k.ndim == 3:
+                    actions_1k = actions_1k.unsqueeze(0)                   # -> (1,K,L,Ca)
 
+                ctx_latent = torch.as_tensor(out['videos']).detach()       # 可能是 (K,S,D) 或 (S,D)
+                if ctx_latent.ndim == 3 and ctx_latent.shape[0] == num_groups:
+                    ctx_latent = ctx_latent.mean(0, keepdim=True)          # -> (1,S,D)
+                elif ctx_latent.ndim == 2:
+                    ctx_latent = ctx_latent.unsqueeze(0)                   # -> (1,S,D)
+
+                # 与训练一致：先反归一化再送 scorer
+                actions_1k_denorm = denorm_odo(actions_1k)              # (1,K,L,Ca)
+
+                # ---- scorer 打分选最优 ----
+                logits_1k = self.diffusion_model.traj_scorer(
+                    actions_bk=actions_1k_denorm.to(device, dtype=weight_dtype),   # B=1
+                    ctx_tokens=ctx_latent.to(device, dtype=weight_dtype)           # B=1
+                )                                    # => (1,K)
+                best_k = int(torch.argmax(logits_1k, dim=1).item())
+
+                # 选出最优轨迹
+                pred_best = actions_1k_denorm[0, best_k]                # (L,Ca)
+
+                gt_i = denorm_odo(gt_actions[i].detach().float().cpu())
+                mse  = ((pred_best.cpu() - gt_i)**2).mean().item()
                 total_mse += mse
                 total_count += 1
-            
+
+                # PDM：有 token 才计算与累计
+                if has_tokens:
+                    token = tokens_list[i]
+                    path = self.metric_cache_loader.metric_cache_paths[token]
+                    with lzma.open(path, 'rb') as f:
+                        metric_cache = pickle.load(f)
+
+                    pdm_tensor = self.reward_fn(
+                        pred_traj=pred_best.unsqueeze(0).to(device),   # (1,L,Ca)
+                        tokens_list=[token],
+                        cache_dict={token: metric_cache},
+                    )  # -> (1,)
+                    pdm_val = float(pdm_tensor.item())
+                    pdm_total += pdm_val
+                    pdm_count += 1
+
             if accelerator.is_main_process:
-                cur_mean = total_mse / total_count
+                cur_mean = total_mse / max(total_count, 1)
                 pbar.set_postfix_str(f"mean_mse={cur_mean:.4f}")
                 pbar.update(1)
-        
-        pbar.close()
-        local_sum = torch.tensor([total_mse, total_count], device=accelerator.device, dtype=torch.float32)
-        global_sum = accelerator.reduce(local_sum, reduction="sum")
-        mean_mse = (global_sum[0] / torch.clamp(global_sum[1], min=1)).item()
-        if accelerator.is_main_process:
-            accelerator.log({"val/action_l2": mean_mse}, step=global_step)
-            print("val/action_l2", mean_mse)
 
-        return {
-            "val_action_l2": mean_mse,
-        }
+        pbar.close()
+
+        # 汇总（多卡）
+        local_sums = torch.tensor(
+            [total_mse, total_count, pdm_total, pdm_count],
+            device=accelerator.device, dtype=torch.float32
+        )
+        global_sums = accelerator.reduce(local_sums, reduction="sum")
+        mse_mean  = (global_sums[0] / torch.clamp(global_sums[1], min=1)).item()
+
+        # 计算并打印/记录 “val 所有 PDM mean”
+        if global_sums[3] > 0:
+            pdm_mean = (global_sums[2] / global_sums[3]).item()
+        else:
+            pdm_mean = float('nan')  # 验证集没有 token 时
+
+        if accelerator.is_main_process:
+            accelerator.log({"val/action_l2": mse_mean}, step=global_step)
+            accelerator.log({"val/pdm_mean": pdm_mean}, step=global_step)   # <<< 记录到 logger
+            print("val/action_l2", mse_mean)
+            print("val/pdm_mean", pdm_mean)                                 # <<< 最重要：打印全量 PDM 均值
+
+        return {"val_action_l2": mse_mean, "val_pdm_mean": pdm_mean}
 
 
 def pack_latents(
@@ -1410,16 +1723,14 @@ def get_rope_scale_factors(fps: float) -> list[float]:
 # ===========================
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, 'configs', 'ltx_model', 'video_model_infer_navsim.yaml')
-    trainer = UnifiedTrainer(cfg, config_path)
+    trainer = UnifiedTrainer(cfg,'navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim_stage2.yaml')
     trainer.prepare_dataset()
     trainer.prepare_val_dataset()
     trainer.prepare_models()
     trainer.prepare_trainable_parameters()  
     trainer.prepare_for_training()         
     trainer.prepare_trackers()
-    trainer.train()
+    trainer.train_stage_two()
 
 if __name__ == "__main__":
     main()

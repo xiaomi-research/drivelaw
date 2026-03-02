@@ -563,7 +563,7 @@ class LTXVideoTransformer3DModel(
                 attention_processor=LTXVideoAttentionProcessor2_0(),
                 **kwargs
             )
-            plan_anchor = np.load('/mnt/evad_fs/worldmodel/yongkangli/navsim-1.1/navsim/agents/videodrive/kmeans_navsim_traj_20.npy')
+            plan_anchor = np.load('navsim/agents/videodrive/kmeans_navsim_traj_20.npy')
 
             self.plan_anchor = nn.Parameter(
                 torch.tensor(plan_anchor, dtype=torch.float32),

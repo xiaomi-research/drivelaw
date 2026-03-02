@@ -17,5 +17,5 @@ defaults:
 
 metric_cache_path: ${oc.env:NAVSIM_EXP_ROOT}/metric_cache # path to metric cache
 
-cache_path: /mnt/evad_fs/worldmodel/yongkangli/NAVSIM/exp_final
+cache_path: path/to/NAVSIM/exp_final
 use_cache_without_dataset: False

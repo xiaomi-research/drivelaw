@@ -893,8 +893,7 @@ class LTXConditionPipeline(DiffusionPipeline, FromSingleFileMixin, LTXVideoLoraL
         latent_mask = F.interpolate(
             pixel_mask_4d,
             size=(num_frames, latent_height, latent_width),
-            mode="trilinear",
-            align_corners=False,
+            mode="nearest",
         ).squeeze(1)  # [B, F, latent_height, latent_width]
         
         # Ensure mask is binary (0 or 1)

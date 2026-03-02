@@ -8,6 +8,7 @@ import lzma
 import pickle
 import os
 import uuid
+import time
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 import torch.distributed as dist
@@ -109,11 +110,14 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
     
     # Distribute tasks to different GPUs by iterating over the sampled tokens
     pdm_results: List[Dict[str, Any]] = []
+    inference_times: List[float] = []  # 记录每个轨迹的推理时间
+    
     for idx, (token) in enumerate(tokens_to_evaluate):
         if dist.get_rank() == 0:
             logger.info(f"Rank {dist.get_rank()} processing scenario {idx+1} / {len(tokens_to_evaluate)} in thread_id={thread_id}, node_id={node_id}")
 
         score_row: Dict[str, Any] = {"token": token, "valid": True}
+        inference_time = None
         try:
             metric_cache_path = metric_cache_loader.metric_cache_paths[token]
             with lzma.open(metric_cache_path, "rb") as f:
@@ -123,10 +127,46 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             requires_scene=True
             if requires_scene:
                 scene = scene_loader.get_scene_from_token(token)
+            
+            # 只测量 agent.compute_trajectory 的推理时间（不包括数据加载）
+            torch.cuda.synchronize()  # 确保GPU操作完成
+            start_time = time.perf_counter()
+            
+            if requires_scene:
                 trajectory = agent.compute_trajectory(agent_input, scene)
             else:
                 trajectory = agent.compute_trajectory(agent_input)
-                
+            
+            torch.cuda.synchronize()  # 确保GPU操作完成
+            end_time = time.perf_counter()
+            inference_time = end_time - start_time  # 单位：秒
+            inference_times.append(inference_time)
+            
+            # 获取详细的时间分解
+            timing_info = getattr(agent, 'last_inference_timing', {})
+            
+            # 实时输出每个轨迹的推理时间和各部分时间
+            timing_str = f"total={inference_time:.4f}s"
+            if timing_info:
+                parts = []
+                if 'feature_building' in timing_info:
+                    parts.append(f"feature_building={timing_info['feature_building']:.4f}s")
+                if 'image_preprocessing' in timing_info:
+                    parts.append(f"image_preprocessing={timing_info['image_preprocessing']:.4f}s")
+                if 'pipe_infer' in timing_info:
+                    parts.append(f"pipe_infer={timing_info['pipe_infer']:.4f}s")
+                if 'action_postprocessing' in timing_info:
+                    parts.append(f"action_postprocessing={timing_info['action_postprocessing']:.4f}s")
+                if 'forward_pass' in timing_info:
+                    parts.append(f"forward_pass={timing_info['forward_pass']:.4f}s")
+                if parts:
+                    timing_str += " [" + ", ".join(parts) + "]"
+            
+            logger.info(f"[Rank {dist.get_rank()}] Token {token}: inference time = {timing_str}")
+            
+            # 将详细时间信息添加到结果中
+            score_row['inference_time_breakdown'] = timing_info
+            
             pdm_result = pdm_score(
                 metric_cache=metric_cache,
                 model_trajectory=trajectory,
@@ -136,12 +176,26 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             )
             score_row.update(asdict(pdm_result))
             score_row['rank'] = dist.get_rank()
+            score_row['inference_time'] = inference_time  # 添加推理时间到结果中
         except Exception as e:
             logger.warning(f"----------- Agent failed for token {token}:")
             traceback.print_exc()
             score_row["valid"] = False
+            score_row['inference_time'] = None
+            score_row['inference_time_breakdown'] = {}
 
         pdm_results.append(score_row)
+        
+        # 每处理10个轨迹或处理完所有轨迹时，输出当前平均时间
+        if (idx + 1) % 10 == 0 or (idx + 1) == len(tokens_to_evaluate):
+            if inference_times:
+                current_avg = sum(inference_times) / len(inference_times)
+                logger.info(f"[Rank {dist.get_rank()}] Progress: {idx+1}/{len(tokens_to_evaluate)} scenarios processed. Current average inference time: {current_avg:.4f} seconds ({len(inference_times)} valid trajectories)")
+    
+    # 最终输出该GPU的平均推理时间
+    if inference_times:
+        avg_inference_time = sum(inference_times) / len(inference_times)
+        logger.info(f"[Rank {dist.get_rank()}] Final average inference time per trajectory: {avg_inference_time:.4f} seconds ({len(inference_times)} valid trajectories)")
     serialized_score_rows = pickle.dumps(pdm_results)
     return serialized_score_rows
 
@@ -299,25 +353,47 @@ def main(cfg: DictConfig) -> None:
 
         num_sucessful_scenarios = pdm_score_df["valid"].sum()
         num_failed_scenarios = len(pdm_score_df) - num_sucessful_scenarios
-        average_row = pdm_score_df.drop(columns=["token", "valid",'rank']).mean(skipna=True)
+        
+        # 计算所有有效轨迹的平均推理时间
+        valid_inference_times = pdm_score_df[pdm_score_df["valid"] == True]["inference_time"].dropna()
+        global_avg_inference_time = None
+        if len(valid_inference_times) > 0:
+            global_avg_inference_time = valid_inference_times.mean()
+            logger.info(f"[Global] Average inference time per trajectory across all GPUs: {global_avg_inference_time:.4f} seconds ({len(valid_inference_times)} valid trajectories)")
+        
+        # 计算平均行，排除非数值列
+        cols_to_drop = ["token", "valid", "rank"]
+        if "inference_time" in pdm_score_df.columns:
+            cols_to_drop.append("inference_time")
+        if "inference_time_breakdown" in pdm_score_df.columns:
+            cols_to_drop.append("inference_time_breakdown")
+        average_row = pdm_score_df.drop(columns=cols_to_drop).mean(skipna=True)
         average_row["token"] = "average"
         average_row["valid"] = pdm_score_df["valid"].all()
         average_row["rank"] = "0"
+        if global_avg_inference_time is not None:
+            average_row["inference_time"] = global_avg_inference_time
         pdm_score_df.loc[len(pdm_score_df)] = average_row
 
         save_path = Path(cfg.output_dir)
         timestamp = datetime.now().strftime("%Y.%m.%d.%H.%M.%S")
         pdm_score_df.to_csv(save_path / f"{timestamp}.csv")
 
-        logger.info(
-            f"""
+        # 准备日志信息
+        log_info = f"""
             Finished running evaluation.
                 Number of successful scenarios: {num_sucessful_scenarios}.
                 Number of failed scenarios: {num_failed_scenarios}.
-                Final average score of valid results: {pdm_score_df['score'].mean()}.
-                Results are stored in: {save_path / f"{timestamp}.csv"}.
-            """
-        )
+                Final average score of valid results: {pdm_score_df['score'].mean()}."""
+        
+        if global_avg_inference_time is not None:
+            log_info += f"""
+                Average inference time per trajectory: {global_avg_inference_time:.4f} seconds."""
+        
+        log_info += f"""
+                Results are stored in: {save_path / f"{timestamp}.csv"}."""
+        
+        logger.info(log_info)
 
 
 if __name__ == "__main__":

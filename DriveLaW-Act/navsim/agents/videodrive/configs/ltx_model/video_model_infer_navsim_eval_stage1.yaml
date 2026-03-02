@@ -2,10 +2,10 @@ model_name: 'ltx_train'
 is_i2v: True
 report_to: none
 tracker_name: ltx_trainer
-
+view_mode: "front"   
 logging_dir: logs
 output_dir: PATH_TO_SAVE_LOGS_AND_CHECKPOINTS
-pretrained_model_name_or_path: path/to/video_model
+pretrained_model_name_or_path: /path/to/DriveLaW-Video
 
 ###
 train_data_class_path: data/agibotworld_dataset.py
@@ -35,14 +35,14 @@ train_mode: 'action_full'
 action_loss_scale: 1.0
 
 # total training step is decided by the minimum of the below two
-train_steps: 88624
+train_steps: 44312
 train_epochs: 100
 steps_to_save: 1000
 steps_to_log: 20
 steps_to_val: 1000
 
 mixed_precision: bf16
-allow_tf32: true
+allow_tf32: false
 
 # timeout, seconds
 nccl_timeout: 600
@@ -57,7 +57,7 @@ add_state: False
 caption_dropout_p: 0.06
 
 # dataloader
-batch_size: 1
+batch_size: 16
 dataloader_num_workers: 8
 pin_memory: True
 
@@ -96,7 +96,7 @@ flow_mode_scale: 1.29
 pixel_wise_timestep: True
 
 diffusion_model:
-  model_path: path/to/video_model/transformer/diffusion_pytorch_model.safetensors
+  model_path: path/to/DriveLaW-Act-stage1/diffusion_pytorch_model.safetensors
   config:
     activation_fn: gelu-approximate
     attention_bias: true
@@ -131,8 +131,8 @@ use_deepspeed: true
 deepspeed:
   zero_optimization:
     stage: 2
-    offload_optimizer:
-      device: cpu
+    # offload_optimizer:
+    #   device: cpu
   fp16:
     enabled: false
   bf16:
