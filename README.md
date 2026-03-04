@@ -1,8 +1,8 @@
 
 
 <div align="center">
-<h3>DriveLaW: Unifying Planning and Video Generation in a Latent Driving World</h3>
-<h3>CVPR 2026</h3>
+<h2>DriveLaW: Unifying Planning and Video Generation in a Latent Driving World</h2>
+<h2>CVPR 2026</h2>
 Tianze Xia<sup>1,2*</sup>, Yongkang Li<sup>1,2*</sup>, Lijun Zhou<sup>2*</sup>, Jingfeng Yao<sup>1</sup>, Kaixin Xiong<sup>2</sup>, Haiyang Sun<sup>2†</sup>,  Bing Wang<sup>2</sup>,<br>Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<sup>1</sup>, Xinggang Wang<sup>1✉</sup>
 
 
