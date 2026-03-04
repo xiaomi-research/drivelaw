@@ -236,7 +236,6 @@ class UnifiedTrainer:
         self._init_logging()
         self._init_directories()
 
-        # 日志 & 保存目录
         if self.state.accelerator.is_main_process:
             start_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
             self.save_folder = os.path.join(self.cfg.output_dir, start_time)
@@ -246,7 +245,6 @@ class UnifiedTrainer:
         else:
             self.save_folder = self.cfg.output_dir
 
-    # -------- 初始化 ----------
     def _init_distributed(self):
         logging_dir = Path(self.cfg.output_dir, self.cfg.logging_dir)
         project_config = ProjectConfiguration(project_dir=self.cfg.output_dir, logging_dir=logging_dir)
@@ -308,7 +306,6 @@ class UnifiedTrainer:
             Path(self.cfg.output_dir).mkdir(parents=True, exist_ok=True)
             self.state.output_dir = self.cfg.output_dir
 
-    # -------- 数据集构建 ----------
     def prepare_dataset(self):
         logger.info("Building NavSim training dataset")
         #agent: AbstractAgent = instantiate(self.cfg.agent)
@@ -492,7 +489,6 @@ class UnifiedTrainer:
     def prepare_trackers(self):
         self.state.accelerator.init_trackers(self.args.tracker_name or "navsim_train", config=self.args.__dict__)
 
-    # -------- 训练 ----------
     def train(self):
         logger.info("Starting training")
         logger.info("Memory before: %s", json.dumps(get_memory_statistics(), indent=2))
@@ -524,7 +520,6 @@ class UnifiedTrainer:
                         mem = apply_color_jitter_to_video(mem)
 
 
-                    # 文本条件（带 dropout）
                     captions = batch['caption']
                     dropout_factor = torch.rand(b, device=accel.device, dtype=weight_dtype)
                     dropout_mask_prompt = (dropout_factor < self.args.caption_dropout_p).unsqueeze(1).unsqueeze(2)
@@ -534,7 +529,6 @@ class UnifiedTrainer:
                     prompt_embeds = self.uncond_prompt_embeds.repeat(b,1,1)*dropout_mask_prompt + \
                                     prompt_embeds*~dropout_mask_prompt
 
-                    # 潜空间 + 条件掩码
                     mem_latents, _ = get_latents(self.vae, mem, mem[:, :, :0])
 
                     latent_height = h // self.SPATIAL_DOWN_RATIO
@@ -542,18 +536,17 @@ class UnifiedTrainer:
                     mem_latents = rearrange(mem_latents, '(b v m) (hh ww) ch -> (b v) ch m hh ww',
                                             b=b, v=v, m=mem_size, hh=latent_height, ww=latent_width)
 
-                    # 现在的 5D latent 只有历史帧
+                    
                     latents_5d = mem_latents                      # (B*V, C, M, H', W')
-                    latent_frames = mem_size                      # 关键：只等于历史帧数
+                    latent_frames = mem_size                      
 
-                    # 生成噪声/时步/掩码（把历史帧视为条件，屏蔽其损失；我们也不算视频损失）
                     noise, conditioning_mask, cond_indicator = gen_noise_from_condition_frame_latent(
                         mem_latents, latent_frames, latent_height, latent_width,
                         noise_to_condition_frames=self.args.noise_to_first_frame
                     )
                     latents = rearrange(latents_5d, 'bv ch f hh ww -> bv (f hh ww) ch')  # (B*V, THW, C)
 
-                    # flow-matching 时步/噪声（视频）
+                   
                     weights = compute_density_for_timestep_sampling(
                         weighting_scheme=self.args.flow_weighting_scheme,
                         batch_size=b,
@@ -572,7 +565,7 @@ class UnifiedTrainer:
 
                     ss = sigmas.reshape(-1,1,1).repeat(1,1,latents.size(-1))
                     if getattr(self.args, "noisy_video", False):
-                        ss = torch.full_like(ss, 1.0)   # 也可以把视频侧完全当噪声处理
+                        ss = torch.full_like(ss, 1.0)   
                     noisy = randn_tensor(latents.shape, device=accel.device, dtype=weight_dtype)
                     noisy_latents = (1.0 - ss) * latents + ss * noisy
 
@@ -597,7 +590,7 @@ class UnifiedTrainer:
                     if act_state is not None:
                         act_state = act_state.to(accel.device, dtype=weight_dtype)
 
-                    # 这里让视频分支运行（用历史帧 tokens），仅为了产生 video states 供动作头用；但不计算视频损失
+                   
                     pred_all = self._forward_pass(
                         latents=noisy_latents,
                         timesteps=timesteps,
@@ -607,7 +600,7 @@ class UnifiedTrainer:
                         latent_height=latent_height,
                         latent_width=latent_width,
                         n_view=v,
-                        return_video=True,                  # 运行视频侧得到 video states
+                        return_video=True,                  
                         return_action=True,
                         video_attention_mask=None,
                         history_action_state=act_state,
@@ -681,7 +674,6 @@ class UnifiedTrainer:
                       return_video, return_action, video_attention_mask,
                       history_action_state, conditioning_mask,
                       action_timestep=None, action_states=None, action_dim=None):
-        """薄封装，兼容你 utils.forward_pass 的接口/返回。"""
         return forward_pass(
             model=self.diffusion_model,
             timesteps=timesteps,
@@ -723,7 +715,7 @@ class UnifiedTrainer:
 
         preds = pipe.infer(
             image=image,
-            prompt=prompt[:1],  # 取一个样本可视化
+            prompt=prompt[:1], 
             negative_prompt='',
             num_inference_steps=num_steps,
             decode_timestep=0.03,
@@ -744,7 +736,6 @@ class UnifiedTrainer:
             action_dim=self.args.diffusion_model["config"]["action_in_channels"],
         )[0]
 
-        # 保存 GT 与 生成
         save_video(rearrange(gt_video[0].data.cpu(), 'c v t h w -> c t h (v w)', v=v),
                    os.path.join(model_save_dir, 'val_gt.mp4'),
                    fps=(self.args.data['train']['chunk']-1)//self.TEMPORAL_DOWN_RATIO+1)

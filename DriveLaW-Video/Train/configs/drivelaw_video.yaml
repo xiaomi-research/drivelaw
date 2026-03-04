@@ -1,13 +1,13 @@
 # Model configuration
 model:
-  model_source: "./models/LTX-Video-0.9.5" # Options: "LTXV_13B_097_DEV", "LTXV_2B_0.9.6_DEV", "LTXV_2B_0.9.5", "LTXV_2B_0.9.1", "LTXV_2B_0.9.0", or a HF repo/local path
+  model_source: "path/to/LTX-Video-0.9.5" # Options: "LTXV_13B_097_DEV", "LTXV_2B_0.9.6_DEV", "LTXV_2B_0.9.5", "LTXV_2B_0.9.1", "LTXV_2B_0.9.0", or a HF repo/local path
   training_mode: "full" # Options: "lora" or "full"
   load_checkpoint: null # Path to checkpoint file or directory to resume from. If directory, latest checkpoint will be used.
 
 # Conditioning configuration
 conditioning:
   mode: "none" # Options: "none", "reference_video"
-  first_frame_conditioning_p: 0.1
+  first_frame_conditioning_p: 1
 
 # Optimization configuration
 optimization:
@@ -32,17 +32,17 @@ acceleration:
 # Data configuration
 # Data configuration
 data:
-  preprocessed_data_root: "./data/preprocessed"  # Update this path to your preprocessed data directory
-  num_dataloader_workers: 2
+  preprocessed_data_root: "./data/.precomputed"  # Update this path to your preprocessed data directory
+  num_dataloader_workers: 8
 
 # Validation configuration
 validation:
   prompts:
-    - "a professional portrait video of a person with blurry bokeh background"
-    - "a video of a person wearing a nice suit"
+    - ""
+    - ""
   negative_prompt: "worst quality, inconsistent motion, blurry, jittery, distorted"
   images: null # Set to a list of image paths to use first-frame conditioning, or null to disable
-  video_dims: [768, 448, 89] # [width, height, frames]
+  video_dims: [1280, 704, 33] # [width, height, frames]
   seed: 42
   inference_steps: 30
   interval: 500 # Set to null to disable validation
@@ -76,4 +76,5 @@ wandb:
 # General configuration
 seed: 42
 output_dir: "path/to/your/output"
+
 

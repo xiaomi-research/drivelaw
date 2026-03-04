@@ -81,10 +81,9 @@ class VideoDriveAgent(AbstractAgent):
         self.weight_dtype = torch.bfloat16
         self.device = "cuda" # device
         
-        # 用于存储最近一次推理的时间分解
+
         self.last_inference_timing = {}
         
-        # 视图模式：单view ("front") 或多view ("surround6")
         self.view_mode = view_mode
         print(f"[VideoDriveAgent] Using view_mode: {view_mode} (detected from config_file: {config_file})")
 
@@ -231,10 +230,6 @@ class VideoDriveAgent(AbstractAgent):
         raise NotImplementedError
 
     def _pad_to_8n1(self, x_5d: torch.Tensor) -> torch.Tensor:
-        """
-        x_5d: (B*, C, T, H, W) —— 顺序序列
-        返回 T' 满足 8n+1；尾部用最后一帧 repeat。
-        """
         T = x_5d.shape[2]
         need = (1 - (T % 8)) % 8  # 使得 (T + need) % 8 == 1
         if need > 0:
@@ -247,7 +242,6 @@ class VideoDriveAgent(AbstractAgent):
         device = self.device
         args = self.args
         
-        # 重置时间记录
         timing = {}
 
         if "images" not in features:
@@ -290,40 +284,7 @@ class VideoDriveAgent(AbstractAgent):
                     "vel":        features["vel"].to(device, dtype=weight_dtype),
                     "acc":        features["acc"].to(device, dtype=weight_dtype),
                 }
-        # speed_desc     = "at low speed" if speed_mps < 5 else ("at moderate speed" if speed_mps < 15 else "at highway speed")
-        # stability_desc = "steady motion" if acc_abs < 0.5 else "gradually changing speed"
 
-        # # 指令 -> 运动语义
-        # driving_command = features["driving_command"]
-        # if isinstance(driving_command, (list, tuple, np.ndarray, torch.Tensor)):
-        #     arr = driving_command if torch.is_tensor(driving_command) else torch.tensor(driving_command)
-        #     arr = arr.flatten().tolist()
-        #     navigation_commands = ['turn left', 'go straight', 'turn right']
-        #     command_str = next((navigation_commands[i] for i, v in enumerate(arr) if v == 1), "unknown")
-        # else:
-        #     command_str = str(driving_command).lower()
-        # if "left" in command_str:
-        #     motion_trend, turning_desc = "gently turning left", "with smooth steering"
-        # elif "right" in command_str:
-        #     motion_trend, turning_desc = "gently turning right", "with smooth steering"
-        # elif "straight" in command_str:
-        #     motion_trend, turning_desc = "driving straight ahead", "with stable lane keeping"
-        # else:
-        #     motion_trend, turning_desc = "driving straight ahead", "with stable lane keeping"  # 兜底
-
-
-
-        # prompt
-        # prompt = (
-        #     f"A high-quality, photorealistic dashboard camera view of autonomous driving. "
-        #     f"Based on the past 2 seconds showing {motion_trend} {turning_desc}, "
-        #     f"predict and generate the next 4 seconds of realistic driving continuation, "
-        #     f"moving {speed_desc} with {stability_desc}. "
-        #     f"Maintain temporal consistency, stable camera perspective, natural motion flow without jitter or artifacts, "
-        #     f"clear details, and realistic physics. "
-        #     f"[Technical: forward {total_forward:.2f}m, lateral {total_lateral:.2f}m, "
-        #     f"yaw {np.degrees(net_yaw_change):.1f}°, speed {speed_mps:.2f}m/s]"
-        # )
         prompt = (
             f"A high-quality, photorealistic dashboard camera view of autonomous driving. "
             f"Based on the past 2 seconds videos, "
@@ -332,19 +293,18 @@ class VideoDriveAgent(AbstractAgent):
             f"clear details, and realistic physics. "
         )
         
-        # 测量图像预处理时间
+
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         cond_pils: List[Image.Image] = self._tensor_video_to_pils(cond_tensor)
         torch.cuda.synchronize()
         timing['image_preprocessing'] = time.perf_counter() - t0
         
-        # 分辨率到 VAE 对齐
+
         # height = int(getattr(args, "height", H_in))
         # width  = int(getattr(args, "width",  W_in))
         # height, width = self.round_to_vae_resolution(height, width)
 
-        # 采样步数/随机种子
         num_frames = int(getattr(args, "num_frames", T_cond))
         num_steps  = int(getattr(args, "num_inference_step", 20))
         seed       = int(getattr(args, "seed", 42))
@@ -353,18 +313,14 @@ class VideoDriveAgent(AbstractAgent):
             "flickering, stuttering, camera shake, unstable footage, warping, trailing artifacts, "
             "temporal inconsistency, jerky motion, choppy framerate"
         )
-        # ✅ 仅动作相关的两个超参（给默认值，也可在 args 里指定）
-        action_chunk = int(getattr(args, "action_chunk",8))  # 预测步数
-        action_dim   = int(getattr(args, "action_dim", 3))                         # 维度：如(steer, throttle, brake)
+        
+        action_chunk = int(getattr(args, "action_chunk",8))  
+        action_dim   = int(getattr(args, "action_dim", 3))                         
 
-        # 根据view_mode设置输入尺寸
         if self.view_mode == "surround6":
-            # 多view: 6个view横向拼接，每个448x256，总尺寸2688x256
             height, width = 256, 3072
         else:
-            # 单view: 1280x704
-            height, width = 704, 1280
-            # 如果config_file中指定了尺寸，优先使用
+            height, width = 768, 1344
             if hasattr(args, "height") and args.height:
                 height = int(args.height)
             if hasattr(args, "width") and args.width:
@@ -373,8 +329,7 @@ class VideoDriveAgent(AbstractAgent):
         condition = LTXVideoCondition(video=cond_pils, frame_index=0)
         generator = torch.Generator(device=device).manual_seed(seed)
 
-        # ✅ 核心：只推理 action，不解码视频
-        # 测量 pipe.infer 的总时间（包括VAE编码、视频模型、diffusion planner等）
+       
         torch.cuda.synchronize()
         t1 = time.perf_counter()
         out = self.pipe.infer(
@@ -390,7 +345,7 @@ class VideoDriveAgent(AbstractAgent):
             output_type="latent", 
             return_action=True,
             return_video=False,
-            action_chunk=action_chunk,   # 与 GT 对齐
+            action_chunk=action_chunk,   
             action_dim=action_dim,
             context_dict=context_dict,
             noise_seed=42,
@@ -400,7 +355,7 @@ class VideoDriveAgent(AbstractAgent):
         torch.cuda.synchronize()
         timing['pipe_infer'] = time.perf_counter() - t1
 
-        # ✅ 解析动作输出
+        
         torch.cuda.synchronize()
         t2 = time.perf_counter()
         preds = out.frames if hasattr(out, "frames") else out
@@ -414,14 +369,13 @@ class VideoDriveAgent(AbstractAgent):
         torch.cuda.synchronize()
         timing['action_postprocessing'] = time.perf_counter() - t2
         
-        # 保存时间信息到类属性
+        
         self.last_inference_timing = timing
         
-        #print(actions)
-        # 可选：如果你有历史动作隐藏态，可把 features.get("history_action_state") 传给 pipe 的 history_action_state
+        
         result: Dict[str, object] = {
-            "actions": actions.numpy(),  # 方便下游用 numpy
-            "actions_tensor": actions,   # 同时保留 tensor
+            "actions": actions.numpy(),  
+            "actions_tensor": actions,   
         }
         return result
 
@@ -433,10 +387,10 @@ class VideoDriveAgent(AbstractAgent):
         """
         self.eval()
         
-        # 重置时间记录
+        
         timing = {}
         
-        # 测量 feature building 时间
+        
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         features: Dict[str, torch.Tensor] = {}
@@ -460,11 +414,11 @@ class VideoDriveAgent(AbstractAgent):
         torch.cuda.synchronize()
         timing['forward_pass'] = time.perf_counter() - t1
         
-        # 合并 forward_test 中的时间信息
+        
         if hasattr(self, 'last_inference_timing'):
             timing.update(self.last_inference_timing)
         
-        # 保存总时间信息
+        
         self.last_inference_timing = timing
         
         # print_pred_gt_together(poses, data_dict["trajectory"])
@@ -533,12 +487,6 @@ class VideoDriveAgent(AbstractAgent):
 
     @staticmethod
     def _compute_rel_from_T44(T: torch.Tensor):
-            """
-            T : (T,4,4)  绝对位姿(ego->global)
-            返回:
-            poses: (T,2)  每步相对平移 [dx, dy]，第0帧为0
-            yaws : (T,)   每步相对偏航 d_yaw，   第0帧为0
-            """
             if not torch.is_tensor(T):
                 T = torch.from_numpy(T)
             T = T.to(dtype=torch.float32)
@@ -550,9 +498,7 @@ class VideoDriveAgent(AbstractAgent):
             for i in range(1, n):
                 T_prev_inv = torch.linalg.inv(T[i-1])
                 T_rel = T_prev_inv @ T[i]          # (4,4)
-                # 相对平移（只取 x,y）
                 poses[i] = T_rel[:2, 3]
-                # 相对偏航（绕z）
                 R = T_rel[:3, :3]
                 yaws[i] = torch.atan2(R[1, 0], R[0, 0])
             return poses, yaws
@@ -575,7 +521,6 @@ class VideoDriveAgent(AbstractAgent):
         return pils
 
 def pil_frames_to_video(pil_frames, output_path, fps):
-    """将 PIL 图像列表保存为 MP4 视频"""
     try:
         export_to_video(pil_frames, output_path, fps=fps)
         return True
@@ -605,7 +550,6 @@ def print_pred_gt_together(poses, gt, precision=3, max_rows=None):
     p = _to_np(poses)
     g = _to_np(gt)
 
-    # 统一形状：[T, D]
     if p.ndim == 1: p = p[:, None]
     if g.ndim == 1: g = g[:, None]
 

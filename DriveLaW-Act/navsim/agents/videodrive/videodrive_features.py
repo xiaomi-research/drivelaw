@@ -145,8 +145,7 @@ class VideoDriveFeatureBuilder(AbstractFeatureBuilder):
                 # Multi-view: horizontally concatenated views, each resized to 512x256.
                 images = _resize_to_hw(images, 256, 3072)
             else:
-                # Single-view: 1280x704.
-                images = _resize_to_hw(images, 704, 1280)
+                images = _resize_to_hw(images, 768, 1344)
             out["images"] = images
 
         # Remaining context kept unchanged.
@@ -283,7 +282,7 @@ class TrajectoryTargetBuilder(AbstractTargetBuilder):
             return {"trajectory": traj, "future_frames": future_frames}
 
 
-def _resize_to_hw(img: torch.Tensor, height: int = 704, width: int = 1280) -> torch.Tensor:
+def _resize_to_hw(img: torch.Tensor, height: int = 768, width: int = 1344) -> torch.Tensor:
     """
     Supported shapes:
       - (C, H, W)

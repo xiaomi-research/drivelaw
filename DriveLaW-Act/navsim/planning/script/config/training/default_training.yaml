@@ -24,7 +24,7 @@ gradient_accumulation_steps: 1
 use_deepspeed: True
 dataloader:
   params:
-    batch_size: 4  # number of samples per batch
+    batch_size: 2  # number of samples per batch
     num_workers: 8  # number of workers for data loading
     pin_memory: true  # pin memory for faster GPU transfer
     prefetch_factor: 2  # number of samples loaded in advance by each worker

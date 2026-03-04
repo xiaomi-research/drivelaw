@@ -1,8 +1,8 @@
 #Future Frames = num_frames - condition_frames
 python infer.py \
-  --condition_video demo/condition_videos/scene_0000_conditioning.mp4 \
-  --prompt demo/prompts/scene_0000_prompt.txt \
-  --output_path ./demo/results/output_0000.mp4 \
+  --condition_video demo/condition_videos/scene_0001_conditioning.mp4 \
+  --prompt demo/prompts/scene_0001_prompt.txt \
+  --output_path ./demo/results/output_0001.mp4 \
   --model_path path/to/DriveLaw-Video \
   --height 704 \
   --width 1280 \

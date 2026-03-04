@@ -18,7 +18,7 @@ torchrun --nproc_per_node=$RESOURCE_GPU \
     $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_videodrive.py \
     train_test_split=$TRAIN_TEST_SPLIT \
     agent=videodrive_agent \
-    agent.config_file="/path/to/navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim_eval_stage1.yaml" \
+    agent.config_file="/path/to/navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim_eval.yaml" \
     cache_path="" \
     use_cache_without_dataset=False \
     experiment_name=videodrive_agent_eval 
