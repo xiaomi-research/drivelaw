@@ -90,7 +90,7 @@ ema_update_after_step: 3000
 
 # lr_scheduler Config
 lr_scheduler: constant_with_warmup
-lr_warmup_steps: 0
+lr_warmup_steps: 1000
 lr_num_cycles: 1
 lr_power: 1.0
 

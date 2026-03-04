@@ -18,7 +18,7 @@ torchrun --nproc_per_node=$RESOURCE_GPU \
          --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_dataset_caching.py \
     agent=videodrive_agent \
-    agent.config_file="/path/to/navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim_stage1.yaml" \
+    agent.config_file="/path/to/navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim.yaml" \
     experiment_name=videodrive_agent_cache \
     train_test_split=$TRAIN_TEST_SPLIT \
     cache_path=$CACHE_PATH 
