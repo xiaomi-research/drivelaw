@@ -71,7 +71,7 @@ from navsim.common.dataloader import SceneLoader
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
 
 # ---------------- Config constants ----------------
-CONFIG_PATH = "navsim/planning/script/config/training"
+CONFIG_PATH = "path/to/DriveLaW-Act/navsim/planning/script/config/training"
 CONFIG_NAME = "default_training"
 
 logger = get_logger("unified_trainer")
@@ -1412,7 +1412,7 @@ def get_rope_scale_factors(fps: float) -> list[float]:
 # ===========================
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig):
-    trainer = UnifiedTrainer(cfg,'navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim_stage1.yaml')
+    trainer = UnifiedTrainer(cfg,'path/to/DriveLaW-Act/navsim/agents/videodrive/configs/ltx_model/video_model_infer_navsim_stage1.yaml')
     trainer.prepare_dataset()
     trainer.prepare_val_dataset()
     trainer.prepare_models()

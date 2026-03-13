@@ -110,7 +110,7 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
     
     # Distribute tasks to different GPUs by iterating over the sampled tokens
     pdm_results: List[Dict[str, Any]] = []
-    inference_times: List[float] = []  # 记录每个轨迹的推理时间
+    inference_times: List[float] = []  
     
     for idx, (token) in enumerate(tokens_to_evaluate):
         if dist.get_rank() == 0:
@@ -128,8 +128,7 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             if requires_scene:
                 scene = scene_loader.get_scene_from_token(token)
             
-            # 只测量 agent.compute_trajectory 的推理时间（不包括数据加载）
-            torch.cuda.synchronize()  # 确保GPU操作完成
+            torch.cuda.synchronize()  
             start_time = time.perf_counter()
             
             if requires_scene:
@@ -137,15 +136,13 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             else:
                 trajectory = agent.compute_trajectory(agent_input)
             
-            torch.cuda.synchronize()  # 确保GPU操作完成
+            torch.cuda.synchronize()  
             end_time = time.perf_counter()
-            inference_time = end_time - start_time  # 单位：秒
+            inference_time = end_time - start_time  
             inference_times.append(inference_time)
             
-            # 获取详细的时间分解
             timing_info = getattr(agent, 'last_inference_timing', {})
             
-            # 实时输出每个轨迹的推理时间和各部分时间
             timing_str = f"total={inference_time:.4f}s"
             if timing_info:
                 parts = []
@@ -164,7 +161,6 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             
             logger.info(f"[Rank {dist.get_rank()}] Token {token}: inference time = {timing_str}")
             
-            # 将详细时间信息添加到结果中
             score_row['inference_time_breakdown'] = timing_info
             
             pdm_result = pdm_score(
@@ -176,7 +172,7 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             )
             score_row.update(asdict(pdm_result))
             score_row['rank'] = dist.get_rank()
-            score_row['inference_time'] = inference_time  # 添加推理时间到结果中
+            score_row['inference_time'] = inference_time  
         except Exception as e:
             logger.warning(f"----------- Agent failed for token {token}:")
             traceback.print_exc()
@@ -186,13 +182,11 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
 
         pdm_results.append(score_row)
         
-        # 每处理10个轨迹或处理完所有轨迹时，输出当前平均时间
         if (idx + 1) % 10 == 0 or (idx + 1) == len(tokens_to_evaluate):
             if inference_times:
                 current_avg = sum(inference_times) / len(inference_times)
                 logger.info(f"[Rank {dist.get_rank()}] Progress: {idx+1}/{len(tokens_to_evaluate)} scenarios processed. Current average inference time: {current_avg:.4f} seconds ({len(inference_times)} valid trajectories)")
     
-    # 最终输出该GPU的平均推理时间
     if inference_times:
         avg_inference_time = sum(inference_times) / len(inference_times)
         logger.info(f"[Rank {dist.get_rank()}] Final average inference time per trajectory: {avg_inference_time:.4f} seconds ({len(inference_times)} valid trajectories)")
@@ -208,22 +202,16 @@ def broadcast_object(obj: Any, device: torch.device, src: int = 0) -> Any:
     :return: Broadcasted object.
     """
     if dist.get_rank() == src:
-        # 序列化对象
         buffer = pickle.dumps(obj)
         tensor = torch.ByteTensor(list(buffer)).to(device)
-        # 广播数据长度
         size_tensor = torch.tensor(len(tensor)).to(device)
         dist.broadcast(size_tensor, src=src)
-        # 广播数据内容
         dist.broadcast(tensor, src=src)
     else:
-        # 接收数据长度
         size_tensor = torch.tensor(0).to(device)
         dist.broadcast(size_tensor, src=src)
-        # 接收数据内容
         tensor = torch.ByteTensor(size_tensor.item()).to(device)
         dist.broadcast(tensor, src=src)
-        # 反序列化对象
         buffer = tensor.cpu().numpy().tobytes()
         obj = pickle.loads(buffer)
     return obj
@@ -246,7 +234,7 @@ def main(cfg: DictConfig) -> None:
     )
     
     torch.cuda.set_device(local_rank)
-    device = torch.device(f'cuda:{local_rank}')  # 显式定义 device
+    device = torch.device(f'cuda:{local_rank}')  
 
     build_logger(cfg)
     worker = build_worker(cfg)
@@ -281,10 +269,9 @@ def main(cfg: DictConfig) -> None:
     else:
         tokens_to_evaluate = []
 
-    # 广播 tokens_to_evaluate 到所有进程
+
     tokens_to_evaluate = broadcast_object(tokens_to_evaluate, device=device, src=0)
 
-    # 后续使用同步后的 tokens_to_evaluate
 
     logger.info("Starting pdm scoring of %s scenarios...", str(len(tokens_to_evaluate)))
     # data_points = [
@@ -297,15 +284,14 @@ def main(cfg: DictConfig) -> None:
     # ]
     sampler = InferenceSampler(len(tokens_to_evaluate))
 
-    # 构建 data_points，只包含当前 GPU 需要处理的 tokens
     data_points = []
     for idx in sampler:
         token = tokens_to_evaluate[idx]
-        log_file = scene_loader.token_to_log_file[token]  # 获取 token 对应的 log_file
+        log_file = scene_loader.token_to_log_file[token]  
         data_points.append({
             "cfg": cfg,
             "log_file": log_file,
-            "tokens": [token],  # 只包含当前 token
+            "tokens": [token],  
         })
 
     # Run PDM scoring and get serialized_score_rows
@@ -354,14 +340,12 @@ def main(cfg: DictConfig) -> None:
         num_sucessful_scenarios = pdm_score_df["valid"].sum()
         num_failed_scenarios = len(pdm_score_df) - num_sucessful_scenarios
         
-        # 计算所有有效轨迹的平均推理时间
         valid_inference_times = pdm_score_df[pdm_score_df["valid"] == True]["inference_time"].dropna()
         global_avg_inference_time = None
         if len(valid_inference_times) > 0:
             global_avg_inference_time = valid_inference_times.mean()
             logger.info(f"[Global] Average inference time per trajectory across all GPUs: {global_avg_inference_time:.4f} seconds ({len(valid_inference_times)} valid trajectories)")
         
-        # 计算平均行，排除非数值列
         cols_to_drop = ["token", "valid", "rank"]
         if "inference_time" in pdm_score_df.columns:
             cols_to_drop.append("inference_time")
@@ -379,7 +363,6 @@ def main(cfg: DictConfig) -> None:
         timestamp = datetime.now().strftime("%Y.%m.%d.%H.%M.%S")
         pdm_score_df.to_csv(save_path / f"{timestamp}.csv")
 
-        # 准备日志信息
         log_info = f"""
             Finished running evaluation.
                 Number of successful scenarios: {num_sucessful_scenarios}.

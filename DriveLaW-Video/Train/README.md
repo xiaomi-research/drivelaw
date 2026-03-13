@@ -2,22 +2,14 @@
 
 This repository contains the code and documentation for training a video generation model using the DriveLaW framework. 
 
-### 1. Installation 
-
-To install the video training module (Must-Do):
-
-```bash
-cd DriveLaW-Video/Train
-pip install -e .
-```
-### 2. Data Preparation 
+### 1. Data Preparation 
 
 The download and preliminary organization methods for the NuPlan and NuScenes datasets are as follows:
 - [Data preparation](docs/Data-Preparation.md)
 
 Before model training, data preprocessing is required. The preprocessed data consists of videos and captions. For videos, you can process the data according to your desired length and resolution. For captions, you can use the vlm annotation method or organize the data in ego-pose into natural language for processing (as described in the paper appendix).
 
-### 3. Dataset preprocessing 
+### 2. Dataset preprocessing 
 
 The trainer supports either videos or single images. Note that your dataset must be homogeneous - either all videos or all images, mixing is not supported. When using images, follow the same preprocessing steps and format requirements as with videos, simply provide image files instead of video files.
 
@@ -119,7 +111,7 @@ dataset/
 ```
 
 
-### 4. Configuring training
+### 3. Configuring training
 
 The main DriveLaW config example is `configs/drivelaw_video.yaml`. Typical fields to modify:
 
@@ -129,7 +121,7 @@ The main DriveLaW config example is `configs/drivelaw_video.yaml`. Typical field
 - Training mode:
   - `model.training_mode: "full"` for full fine-tuning.
  
-### 5. Launching training
+### 4. Launching training
 
 Single-GPU / single-node example:
 

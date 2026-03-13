@@ -50,12 +50,12 @@ The codebase is organized into two main components:
 - **DriveLaW-Video**: Video world model 
 - **DriveLaW-Act**: Diffusion-based planner that consumes video latents from DriveLaW-Video
 
-Basci installation for DriveLaW :
+Basci installation for DriveLaW with python==3.10 :
 
 ```bash
+cd DriveLaW-Act
 pip install -e .
-git clone https://github.com/motional/nuplan-devkit.git
-cd nuplan-devkit
+cd DriveLaW-Video/Train
 pip install -e .
 ```
 

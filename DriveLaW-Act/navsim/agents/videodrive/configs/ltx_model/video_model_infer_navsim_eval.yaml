@@ -20,12 +20,12 @@ textenc_class_path: transformers
 textenc_class: T5EncoderModel
 vae_class_path: diffusers
 vae_class: AutoencoderKLLTXVideo
-diffusion_model_class_path: navsim/agents/videodrive/video_models/ltx_models/transformer_ltx.py
+diffusion_model_class_path: path/to/DriveLaW-Act/navsim/agents/videodrive/video_models/ltx_models/transformer_ltx.py
 diffusion_model_class: LTXVideoTransformer3DModel
 diffusion_scheduler_class_path: diffusers
 diffusion_scheduler_class: FlowMatchEulerDiscreteScheduler
 
-pipeline_class_path: navsim/agents/videodrive/video_models/pipeline/pipeline_ltx_condition.py
+pipeline_class_path: path/to/DriveLaW-Act/navsim/agents/videodrive/video_models/pipeline/pipeline_ltx_condition.py
 pipeline_class: LTXConditionPipeline
 
 # 
@@ -96,7 +96,7 @@ flow_mode_scale: 1.29
 pixel_wise_timestep: True
 
 diffusion_model:
-  model_path: path/to/DriveLaW-Act-stage1/diffusion_pytorch_model.safetensors
+  model_path: path/to/DriveLaW-Act/transformer/diffusion_pytorch_model.safetensors
   config:
     activation_fn: gelu-approximate
     attention_bias: true

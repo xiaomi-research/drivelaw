@@ -13,10 +13,11 @@ To accelerate, we cache the hidden states output by the Video Model, which enabl
 
 
 
-### Step 1: Cache hidden states
+### Step 1: Cache hidden states and metric
 ```bash
 # cache dataset for training
 sh scripts/evaluation/run_caching_videodrive_hidden_state.sh
+sh scripts/evaluation/run_metric_caching.sh
 ```
 
 ### Step 2: Configure and run training
