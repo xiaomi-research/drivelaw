@@ -20,7 +20,7 @@ python infer.py \
   --condition_video demo/condition_videos/scene_0001_conditioning.mp4 \
   --prompt demo/prompts/scene_0001_prompt.txt \
   --output_path ./demo/results/output_0000.mp4 \ # without condition_frames
-  --model_path PATH_TO_DriveLaW-Video \
+  --model_path PATH_TO_DriveLaW-Video \  # use our pretrained DriveLaW-Video or model trained by yourself
   --height 704 \
   --width 1280 \
   --num_frames 33 \ # contains condition_frames

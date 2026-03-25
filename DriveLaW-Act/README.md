@@ -5,7 +5,7 @@ Please download the NAVSIM dataset following the instructions in the [installati
 
 ## Stage 2: Diffusion Planner Imitation Learning
 
-You can download our pretrained **DriveLaW-Video** from [DriveLaW-Video](../DriveLaW-Video).  
+You can download our pretrained model from [huggingface](https://huggingface.co/tz2026/DriveLaW) to train DriveLaw-Act by yourself or directly evaluate our pretrained DriveLaW-Act.  
 
 For the diffusion planner training, the first step is to **cache datasets for faster training**. 
 

@@ -14,12 +14,14 @@ Tianze Xia<sup>1,2*</sup>, Yongkang Li<sup>1,2*</sup>, Lijun Zhou<sup>2*</sup>, 
 
 <a href="https://arxiv.org/abs/2512.23421"><img src='https://img.shields.io/badge/arXiv-DriveLaW-red' alt='Paper PDF'></a>
 <a href="https://wm-research.github.io/DriveLaW/"><img src='https://img.shields.io/badge/Project_Page-DriveLaW-green' alt='Project Page'></a>
+<a href="https://huggingface.co/tz2026/DriveLaW"><img src='https://img.shields.io/badge/Huggingface-DriveLaW-yellow' alt='Huggingface'></a>
+
 </div>
 
 ## News
-`[2026/3/17]` Weights of DriveLaW-Video and DriveLaW-Act have been released.🚀
+`[2026/3/25]` Weights of DriveLaW-Video and DriveLaW-Act have been released.🚀
 
-`[2026/3/16]` Codes of DriveLaW has been released.🚀
+`[2026/3/25]` Codes of DriveLaW has been released.🚀
 
 `[2026/2/21]` Our paper has been accepted at CVPR 2026. 🎉
 
@@ -50,7 +52,7 @@ The codebase is organized into two main components:
 - **DriveLaW-Video**: Video world model 
 - **DriveLaW-Act**: Diffusion-based planner that consumes video latents from DriveLaW-Video
 
-Basci installation for DriveLaW with python==3.10 :
+Basic installation for DriveLaW with python==3.10 :
 
 ```bash
 cd DriveLaW-Act
@@ -67,6 +69,9 @@ For a **video-only** world model :
 For **planning / NavSim** evaluation :
 
 - [DriveLaW-Act/README.md](DriveLaW-Act/README.md)
+
+Download weights:
+- [Huggingface-DriveLaW](https://huggingface.co/tz2026/DriveLaW)
 
 ## Contact
 If you have any questions, please contact Tianze Xia via email (xiatianze@hust.edu.cn).
