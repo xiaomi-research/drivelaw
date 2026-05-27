@@ -9,9 +9,6 @@ You can download our pretrained model from [huggingface](https://huggingface.co/
 
 For the diffusion planner training, the first step is to **cache datasets for faster training**. 
 
-To accelerate, we cache the hidden states output by the Video Model, which enables much faster training.  
-
-
 
 ### Step 1: Cache hidden states and metric
 ```bash
