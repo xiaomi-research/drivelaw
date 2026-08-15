@@ -93,14 +93,14 @@ body {
   display: inline-block;
   width: auto;
   margin: 0 auto 1rem;
-  padding: 0.4rem 1rem;
-  border: 1px solid rgba(14, 165, 233, 0.25);
+  padding: 0.45rem 1.1rem;
+  border: 1px solid #dbe3ee;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.7);
-  color: #0369a1;
+  background: rgba(255, 255, 255, 0.85);
+  color: #475569;
   font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(8px);
@@ -168,16 +168,31 @@ body {
 }
 
 .publication-links .button {
-  border: 1px solid transparent;
+  border: 1px solid #dbe3ee;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #111827;
+  font-family: 'Google Sans', 'Noto Sans', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   box-shadow: var(--shadow-sm);
-  background: linear-gradient(180deg, #0f172a, #1e293b);
-  color: #fff;
-  transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out);
+  transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), border-color 0.18s ease;
+}
+
+.publication-links .button .icon {
+  color: var(--accent);
+  transition: transform 0.18s var(--ease-out);
 }
 
 .publication-links .button:hover {
   transform: translateY(-2px);
+  border-color: #94a3b8;
   box-shadow: var(--shadow-md);
+}
+
+.publication-links .button:hover .icon {
+  transform: scale(1.08);
 }
 
 .footer {

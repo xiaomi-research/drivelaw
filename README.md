@@ -4,9 +4,7 @@
 
 **Unifying Planning and Video Generation in a Latent Driving World**
 
-<picture>
-  <img alt="CVPR 2026" src="https://img.shields.io/badge/CVPR-2026-0ea5e9?style=for-the-badge&labelColor=0f172a">
-</picture>
+<span class="venue-pill">CVPR 2026</span>
 
 Tianze Xia<sup>1,2*</sup>, Yongkang Li<sup>1,2*</sup>, Lijun Zhou<sup>2*</sup>, Jingfeng Yao<sup>1</sup>, Kaixin Xiong<sup>2</sup>, Haiyang Sun<sup>2†</sup>, Bing Wang<sup>2</sup>,  
 Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<sup>1</sup>, Xinggang Wang<sup>1✉</sup>
@@ -17,12 +15,46 @@ Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<su
 
 <br>
 
-[![Paper](https://img.shields.io/badge/Paper-arXiv-B31B1B?style=for-the-badge&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2512.23421)
-[![Project Page](https://img.shields.io/badge/Website-DriveLaW-2F81F7?style=for-the-badge&logo=google-chrome&logoColor=white)](https://xiaomi-research.github.io/drivelaw/)
-[![Code](https://img.shields.io/badge/Code-GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/xiaomi-research/drivelaw)
-[![Weights](https://img.shields.io/badge/%F0%9F%A4%97%20Weights-DriveLaW-yellow?style=for-the-badge)](https://huggingface.co/tz2026/DriveLaW)
+<a class="link-btn" href="https://arxiv.org/abs/2512.23421">📄 Paper</a>
+<a class="link-btn" href="https://xiaomi-research.github.io/drivelaw/">🌐 Project Page</a>
+<a class="link-btn" href="https://github.com/xiaomi-research/drivelaw">💻 Code</a>
+<a class="link-btn" href="https://huggingface.co/tz2026/DriveLaW">🤗 Weights</a>
 
 </div>
+
+<style>
+.venue-pill {
+  display: inline-block;
+  padding: 6px 16px;
+  border: 1px solid #dbe3ee;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.link-btn {
+  display: inline-block;
+  margin: 4px 6px;
+  padding: 8px 18px;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all .18s ease;
+}
+.link-btn:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .08);
+  transform: translateY(-1px);
+  text-decoration: none;
+}
+</style>
 
 ## News
 
