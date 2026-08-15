@@ -15,10 +15,10 @@ Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<su
 
 <br>
 
-<a class="link-btn" href="https://arxiv.org/abs/2512.23421">📄 Paper</a>
-<a class="link-btn" href="https://xiaomi-research.github.io/drivelaw/">🌐 Project Page</a>
-<a class="link-btn" href="https://github.com/xiaomi-research/drivelaw">💻 Code</a>
-<a class="link-btn" href="https://huggingface.co/tz2026/DriveLaW">🤗 Weights</a>
+<a href="https://arxiv.org/abs/2512.23421"><img src='https://img.shields.io/badge/arXiv-DriveLaW-red' alt='Paper PDF'></a>
+<a href="https://xiaomi-research.github.io/drivelaw/"><img src='https://img.shields.io/badge/Project_Page-DriveLaW-green' alt='Project Page'></a>
+<a href="https://github.com/xiaomi-research/drivelaw"><img src='https://img.shields.io/badge/Code-GitHub-black' alt='Code'></a>
+<a href="https://huggingface.co/tz2026/DriveLaW"><img src='https://img.shields.io/badge/Huggingface-DriveLaW-yellow' alt='Huggingface'></a>
 
 </div>
 
@@ -34,25 +34,6 @@ Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<su
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-.link-btn {
-  display: inline-block;
-  margin: 4px 6px;
-  padding: 8px 18px;
-  border: 1px solid #dbe3ee;
-  border-radius: 10px;
-  background: #ffffff;
-  color: #111827;
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: all .18s ease;
-}
-.link-btn:hover {
-  border-color: #94a3b8;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, .08);
-  transform: translateY(-1px);
-  text-decoration: none;
 }
 </style>
 
