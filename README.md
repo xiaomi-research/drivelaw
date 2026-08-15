@@ -4,7 +4,7 @@
 
 **Unifying Planning and Video Generation in a Latent Driving World**
 
-<span class="venue-pill">CVPR 2026</span>
+### CVPR 2026
 
 Tianze Xia<sup>1,2*</sup>, Yongkang Li<sup>1,2*</sup>, Lijun Zhou<sup>2*</sup>, Jingfeng Yao<sup>1</sup>, Kaixin Xiong<sup>2</sup>, Haiyang Sun<sup>2†</sup>, Bing Wang<sup>2</sup>,  
 Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<sup>1</sup>, Xinggang Wang<sup>1✉</sup>
@@ -21,21 +21,6 @@ Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<su
 <a href="https://huggingface.co/tz2026/DriveLaW"><img src='https://img.shields.io/badge/Huggingface-DriveLaW-yellow' alt='Huggingface'></a>
 
 </div>
-
-<style>
-.venue-pill {
-  display: inline-block;
-  padding: 6px 16px;
-  border: 1px solid #dbe3ee;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #475569;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-</style>
 
 ## News
 
