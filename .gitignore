@@ -88,6 +88,9 @@ data/
 *.csv
 !configs/*.csv
 
+# Local PDFs (not for GitHub)
+*.pdf
+
 # Temporary files
 *.tmp
 *.temp
