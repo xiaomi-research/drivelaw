@@ -65,6 +65,15 @@ pic*/
 *.jpg
 *.jpeg
 *.gif
+# Keep project page and README images
+!static/images/*.png
+!static/images/*.jpg
+!static/images/*.jpeg
+!static/images/*.gif
+!assets/images/*.png
+!assets/images/*.jpg
+!assets/images/*.jpeg
+!assets/images/*.gif
 
 # Model checkpoints (too large for git)
 *.safetensors
