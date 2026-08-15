@@ -1,34 +1,35 @@
 <div align="center">
 
-# DriveLaW: Unifying Planning and Video Generation in a Latent Driving World
+# DriveLaW
 
-### CVPR 2026
+**Unifying Planning and Video Generation in a Latent Driving World**
+
+<picture>
+  <img alt="CVPR 2026" src="https://img.shields.io/badge/CVPR-2026-0ea5e9?style=for-the-badge&labelColor=0f172a">
+</picture>
 
 Tianze Xia<sup>1,2*</sup>, Yongkang Li<sup>1,2*</sup>, Lijun Zhou<sup>2*</sup>, Jingfeng Yao<sup>1</sup>, Kaixin Xiong<sup>2</sup>, Haiyang Sun<sup>2†</sup>, Bing Wang<sup>2</sup>,  
 Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<sup>1</sup>, Xinggang Wang<sup>1✉</sup>
 
-<sup>1</sup> Huazhong University of Science and Technology  
-<sup>2</sup> Xiaomi EV
+<sup>1</sup> Huazhong University of Science and Technology &nbsp;&nbsp; <sup>2</sup> Xiaomi EV
 
-(\*) Equal contribution. (†) Project leader. (✉) Corresponding Author.
+<sup>*</sup> Equal contribution. &nbsp; <sup>†</sup> Project leader. &nbsp; <sup>✉</sup> Corresponding author.
 
 <br>
 
-<a href="https://arxiv.org/abs/2512.23421"><img src="https://img.shields.io/badge/arXiv-DriveLaW-red" alt="arXiv"></a>
-<a href="https://xiaomi-research.github.io/drivelaw/"><img src="https://img.shields.io/badge/Project%20Page-DriveLaW-green" alt="Project Page"></a>
-<a href="https://github.com/xiaomi-research/drivelaw"><img src="https://img.shields.io/badge/Code-GitHub-black" alt="Code"></a>
-<a href="https://huggingface.co/tz2026/DriveLaW"><img src="https://img.shields.io/badge/Hugging%20Face-DriveLaW-yellow" alt="Hugging Face"></a>
+[![Paper](https://img.shields.io/badge/Paper-arXiv-B31B1B?style=for-the-badge&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2512.23421)
+[![Project Page](https://img.shields.io/badge/Website-DriveLaW-2F81F7?style=for-the-badge&logo=google-chrome&logoColor=white)](https://xiaomi-research.github.io/drivelaw/)
+[![Code](https://img.shields.io/badge/Code-GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/xiaomi-research/drivelaw)
+[![Weights](https://img.shields.io/badge/%F0%9F%A4%97%20Weights-DriveLaW-yellow?style=for-the-badge)](https://huggingface.co/tz2026/DriveLaW)
 
 </div>
 
----
-
 ## News
 
-`[2026/3/25]` Weights of DriveLaW-Video and DriveLaW-Act have been released. 🚀  
-`[2026/3/25]` Codes of DriveLaW have been released. 🚀  
-`[2026/2/21]` Our paper has been accepted at CVPR 2026. 🎉  
-`[2025/12/30]` [ArXiv](https://arxiv.org/abs/2512.23421) paper release. Models/Code are coming soon. ☕️
+- **`Mar. 25, 2026`:** Weights of DriveLaW-Video and DriveLaW-Act have been released. 🚀
+- **`Mar. 25, 2026`:** Codes of DriveLaW have been released. 🚀
+- **`Feb. 21, 2026`:** Our paper has been accepted at CVPR 2026. 🎉
+- **`Dec. 30, 2025`:** [ArXiv](https://arxiv.org/abs/2512.23421) paper release. Models/Code are coming soon. ☕️
 
 ## Updates
 
@@ -36,14 +37,12 @@ Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<su
 - [x] Release inference & training codes
 - [x] Release model weights
 
-## Abstract
+## Overview
 
 World models have become crucial for autonomous driving, as they learn how scenarios evolve over time to address the long-tail challenges of the real world. However, current approaches relegate world models to limited roles: they operate within ostensibly unified architectures that still keep world prediction and motion planning as decoupled processes. To bridge this gap, we propose DriveLaW, a novel paradigm that unifies video generation and motion planning. By directly injecting the latent representation from its video generator into the planner, DriveLaW ensures inherent consistency between high-fidelity future generation and reliable trajectory planning. Specifically, DriveLaW consists of two core components: DriveLaW-Video, our powerful world model that generates high-fidelity forecasting with expressive latent representations, and DriveLaW-Act, a diffusion planner that generates consistent and reliable trajectories from the latent of DriveLaW-Video, with both components optimized by a three-stage progressive training strategy. The power of our unified paradigm is demonstrated by new state-of-the-art results across both tasks. DriveLaW not only advances video prediction significantly, surpassing best-performing work by 33.3% in FID and 1.8% in FVD, but also achieves a new record on the NAVSIM planning benchmark.
 
-## Overview
-
 <div align="center">
-  <img src="assets/images/drivelaw-fig2.png" width="1000" alt="DriveLaW Overview">
+  <img src="assets/images/drivelaw-fig2.png" alt="DriveLaW Overview" width="1000">
 </div>
 
 ## Getting Started
@@ -64,13 +63,12 @@ pip install -e .
 
 Documentation:
 
-- Video world model:
-  - [DriveLaW-Video/Infer/README.md](DriveLaW-Video/Infer/README.md)
-  - [DriveLaW-Video/Train/README.md](DriveLaW-Video/Train/README.md)
-- Planning / NavSim evaluation:
-  - [DriveLaW-Act/README.md](DriveLaW-Act/README.md)
-- Weights:
-  - [Hugging Face — DriveLaW](https://huggingface.co/tz2026/DriveLaW)
+| Component | Guide |
+|-----------|-------|
+| Video world model (inference) | [DriveLaW-Video/Infer/README.md](DriveLaW-Video/Infer/README.md) |
+| Video world model (training) | [DriveLaW-Video/Train/README.md](DriveLaW-Video/Train/README.md) |
+| Planning / NavSim evaluation | [DriveLaW-Act/README.md](DriveLaW-Act/README.md) |
+| Weights | [Hugging Face — DriveLaW](https://huggingface.co/tz2026/DriveLaW) |
 
 ## Contact
 
@@ -82,7 +80,7 @@ DriveLaW is inspired by the following outstanding contributions to the open-sour
 
 ## Citation
 
-If you find DriveLaW useful in your research or applications, please consider giving us a star 🌟 and citing the following BibTeX entry.
+If you find DriveLaW useful in your research or applications, please consider giving us a star 🌟 and citing it by the following BibTeX entry.
 
 ```bibtex
 @article{xia2025drivelaw,

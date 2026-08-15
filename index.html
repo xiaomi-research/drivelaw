@@ -28,14 +28,22 @@
 <body>
 
 <section class="hero">
+  <div class="hero-bg">
+    <span class="orb orb-a"></span>
+    <span class="orb orb-b"></span>
+    <span class="orb orb-c"></span>
+  </div>
   <div class="hero-body">
     <div class="container is-max-desktop">
       <div class="columns is-centered">
         <div class="column has-text-centered">
+          <div class="publication-venue reveal is-visible">CVPR 2026</div>
           <h1 class="title is-1 publication-title">
-            [CVPR 2026] DriveLaW:<br>
-            Unifying Planning and Video Generation in a Latent Driving World
+            <span class="text-gradient">DriveLaW</span>
           </h1>
+          <h2 class="subtitle is-3 publication-subtitle">
+            Unifying Planning and Video Generation in a Latent Driving World
+          </h2>
 
           <div class="is-size-5 publication-authors">
             <span class="author-block"><a>Tianze Xia</a><sup>1,2,*</sup>,</span>
@@ -52,7 +60,7 @@
             <span class="author-block"><a href="https://xwcv.github.io/">Xinggang Wang</a><sup>1,✉</sup></span>
           </div>
 
-          <div class="is-size-5 publication-authors">
+          <div class="is-size-6 publication-authors">
             <span class="author-block"><sup>1</sup>Huazhong University of Science &amp; Technology</span>
             <span class="author-block"><sup>2</sup>Xiaomi EV</span>
           </div>
@@ -62,7 +70,7 @@
             <span class="author-block"><sup>✉</sup>Corresponding Author</span>
           </div>
 
-          <div class="publication-links">
+          <div class="publication-links reveal is-visible">
             <span class="link-block">
               <a href="https://arxiv.org/abs/2512.23421"
                  class="external-link button is-normal is-rounded is-dark">
@@ -93,7 +101,7 @@
   <div class="container is-max-desktop">
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
-        <h2 class="title is-3">Abstract</h2>
+        <h2 class="title is-3 reveal">Abstract</h2>
         <div class="content has-text-justified">
           <p>
             World models have become crucial for autonomous driving, as they learn how scenarios evolve over time to address the long-tail challenges of the real world. However, current approaches relegate world models to limited roles: they operate within ostensibly unified architectures that still keep world prediction and motion planning as decoupled processes. To bridge this gap, we propose DriveLaW, a novel paradigm that unifies video generation and motion planning. By directly injecting the latent representation from its video generator into the planner, DriveLaW ensures inherent consistency between high-fidelity future generation and reliable trajectory planning. Specifically, DriveLaW consists of two core components: DriveLaW-Video, our powerful world model that generates high-fidelity forecasting with expressive latent representations, and DriveLaW-Act, a diffusion planner that generates consistent and reliable trajectories from the latent of DriveLaW-Video, with both components optimized by a three-stage progressive training strategy. The power of our unified paradigm is demonstrated by new state-of-the-art results across both tasks. DriveLaW not only advances video prediction significantly, surpassing best-performing work by 33.3% in FID and 1.8% in FVD, but also achieves a new record on the NAVSIM planning benchmark.
@@ -106,50 +114,50 @@
 
 <section class="section">
   <div class="container is-max-desktop">
-    <h2 class="title is-3">Motivation</h2>
+    <h2 class="title is-3 reveal">Motivation</h2>
     <div class="content has-text-justified">
       VGM (Video Generation Model) latent features can serve as more efficient and informative conditions for action learning. We visualize and compare three types of latent representations. We apply PCA (Principal Component Analysis) to project each representation to 3 principal components mapped to RGB channels, all upsampled to 1280×704. The visualization clearly shows that BEV and VLM features are diffuse, unstable, and exhibit irregular focus patterns. In contrast, VGM features are sharper, less noisy, and demonstrate superior semantic coherence with strong spatial structure awareness, even under challenging driving conditions. This suggests that VGM features provide a more suitable representation for action learning in autonomous driving.
     </div>
-    <img class="figure-img" src="./static/images/feature.png" alt="Latent feature comparison">
+    <img class="figure-img figure-wide reveal" src="./static/images/feature.png" alt="Latent feature comparison">
   </div>
 </section>
 
 <section class="section">
   <div class="container is-max-desktop">
-    <h2 class="title is-3">Framework</h2>
+    <h2 class="title is-3 reveal">Framework</h2>
     <div class="content has-text-justified">
       DriveLaW is a unified framework composed of a DriveLaW-Video and a DriveLaW-Act. The video model first encodes past driving frames with a spatiotemporal VAE and encodes textual prompts with a text encoder. A stack of Video DiT blocks then performs latent-space denoising, and the VAE decoder reconstructs the video. Concurrently, action noise, ego status, and high-level commands are encoded and fed into the action model. Video latents from the Video DiT serve as conditioning signals, guiding the Action DiT to output the final trajectory. The Video DiT and Action DiT are chained and trained to learn driving representations from large-scale video generation, providing a shared basis for planning.
     </div>
-    <img class="figure-img" src="./static/images/drivelaw-framework.png" alt="DriveLaW framework">
+    <img class="figure-img figure-wide reveal" src="./static/images/drivelaw-framework.png" alt="DriveLaW framework">
   </div>
 </section>
 
 <section class="section">
   <div class="container is-max-desktop">
-    <h2 class="title is-3">Common Video Generation on nuScenes</h2>
+    <h2 class="title is-3 reveal">Common Video Generation on nuScenes</h2>
     <div class="video-grid">
-      <div class="video-item">
+      <div class="video-item reveal">
         <h3 class="title is-5">Clip 1</h3>
         <video controls width="100%">
           <source src="./static/videos/scene_0001_window_000_comparison_converted.mp4" type="video/mp4">
           Your browser does not support the video tag.
         </video>
       </div>
-      <div class="video-item">
+      <div class="video-item reveal">
         <h3 class="title is-5">Clip 2</h3>
         <video controls width="100%">
           <source src="./static/videos/scene_0003_window_007_comparison_converted.mp4" type="video/mp4">
           Your browser does not support the video tag.
         </video>
       </div>
-      <div class="video-item">
+      <div class="video-item reveal">
         <h3 class="title is-5">Clip 3</h3>
         <video controls width="100%">
           <source src="./static/videos/scene_0007_window_002_comparison_converted.mp4" type="video/mp4">
           Your browser does not support the video tag.
         </video>
       </div>
-      <div class="video-item">
+      <div class="video-item reveal">
         <h3 class="title is-5">Clip 4</h3>
         <video controls width="100%">
           <source src="./static/videos/scene_0014_window_020_comparison_converted.mp4" type="video/mp4">
@@ -162,16 +170,16 @@
 
 <section class="section">
   <div class="container is-max-desktop">
-    <h2 class="title is-3">Rainy Video Generation on nuScenes</h2>
+    <h2 class="title is-3 reveal">Rainy Video Generation on nuScenes</h2>
     <div class="video-grid">
-      <div class="video-item">
+      <div class="video-item reveal">
         <h3 class="title is-5">Clip 1</h3>
         <video controls width="100%">
           <source src="./static/videos/scene_0070_window_014_comparison_converted.mp4" type="video/mp4">
           Your browser does not support the video tag.
         </video>
       </div>
-      <div class="video-item">
+      <div class="video-item reveal">
         <h3 class="title is-5">Clip 2</h3>
         <video controls width="100%">
           <source src="./static/videos/scene_0074_window_018_comparison_converted.mp4" type="video/mp4">
@@ -184,37 +192,37 @@
 
 <section class="section">
   <div class="container is-max-desktop">
-    <h2 class="title is-3">Qualitative Results on the Navtest Benchmark</h2>
+    <h2 class="title is-3 reveal">Qualitative Results on the Navtest Benchmark</h2>
     <div class="content has-text-justified">
       We present representative cases from the Navtest splits, highlighting DriveLaW’s ability to predict future trajectories while ensuring safety and smoothness.
     </div>
-    <img class="figure-img" src="./static/images/navsim-qual.png" alt="Navtest qualitative results">
+    <img class="figure-img figure-narrow reveal" src="./static/images/navsim-qual.png" alt="Navtest qualitative results">
   </div>
 </section>
 
 <section class="section">
   <div class="container is-max-desktop">
-    <h2 class="title is-3">Video Generation Results</h2>
+    <h2 class="title is-3 reveal">Video Generation Results</h2>
     <div class="content has-text-justified">
       Quantitative evaluation of video generation on the NuScenes validation set. Our method outperforms prior single-view state-of-the-art methods in generation quality.
     </div>
-    <img class="figure-img" src="./static/images/video-gen.png" alt="Video generation results">
+    <img class="figure-img figure-wide reveal" src="./static/images/video-gen.png" alt="Video generation results">
   </div>
 </section>
 
 <section class="section">
   <div class="container is-max-desktop">
-    <h2 class="title is-3">Planning Results</h2>
+    <h2 class="title is-3 reveal">Planning Results</h2>
     <div class="content has-text-justified">
       Performance comparison on NAVSIM Navtest using closed-loop metrics. Methods are grouped by whether they employ an explicit world model: Traditional End-to-End Methods and World Model Methods. † denotes methods trained with the same flow-matching objective.
     </div>
-    <img class="figure-img" src="./static/images/navsim.png" alt="Planning results">
+    <img class="figure-img figure-narrow reveal" src="./static/images/navsim.png" alt="Planning results">
   </div>
 </section>
 
 <section class="section" id="BibTeX">
   <div class="container is-max-desktop content">
-    <h2 class="title is-3">BibTeX</h2>
+    <h2 class="title is-3 reveal">BibTeX</h2>
     <pre><code>@article{xia2025drivelaw,
   title={DriveLaW: Unifying Planning and Video Generation in a Latent Driving World},
   author={Xia, Tianze and Li, Yongkang and Zhou, Lijun and Yao, Jingfeng and Xiong, Kaixin and Sun, Haiyang and Wang, Bing and Ma, Kun and Ye, Hangjun and Liu, Wenyu and others},
@@ -245,6 +253,25 @@
     </div>
   </div>
 </footer>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var els = document.querySelectorAll('.reveal');
+  if (!('IntersectionObserver' in window)) {
+    els.forEach(function (el) { el.classList.add('is-visible'); });
+    return;
+  }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('is-visible');
+        io.unobserve(entry.target);
+      }
+    });
+  }, { rootMargin: '0px 0px -10% 0px', threshold: 0.12 });
+  els.forEach(function (el) { io.observe(el); });
+});
+</script>
 
 </body>
 </html>
