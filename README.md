@@ -24,6 +24,7 @@ Kun Ma<sup>2</sup>, Guang Chen<sup>2</sup>, Hangjun Ye<sup>2</sup>, Wenyu Liu<su
 
 ## News
 
+- **`Aug. 25, 2026`:** Our new work [ReWorld](https://github.com/xiaomi-research/ReWorld) is open-sourced — lower training cost, better results (**FVD 61.9**, **PDMS 90.4**). 🔥
 - **`Mar. 25, 2026`:** Weights of DriveLaW-Video and DriveLaW-Act have been released. 🚀
 - **`Mar. 25, 2026`:** Codes of DriveLaW have been released. 🚀
 - **`Feb. 21, 2026`:** Our paper has been accepted at CVPR 2026. 🎉
